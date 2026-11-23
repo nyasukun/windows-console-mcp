@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Windows Console</title>
+  <link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+  <header class="session-bar">
+    <div class="identity"><span class="device" data-icon="monitor"></span><div><strong>Windows 11 Pro</strong><span class="product">Windows Console</span></div></div>
+    <span id="status" role="status">接続待ち</span>
+    <button id="reconnect" hidden>再接続</button>
+    <nav aria-label="セッションの操作">
+      <button id="compose" aria-label="日本語入力" class="compose" title="日本語入力"><span data-icon="type"></span><span>日本語入力</span></button>
+      <div class="group" aria-label="クリップボード">
+        <button id="paste" title="Windows に貼り付け" aria-label="Windows に貼り付け" data-icon="paste"></button>
+        <button id="copy" title="Windows の選択をコピー" aria-label="Windows の選択をコピー" data-icon="copy"></button>
+      </div>
+      <button id="full" title="全画面" aria-label="全画面" data-icon="expand"></button>
+      <button id="menu-trigger" popovertarget="session-menu" aria-label="セッションメニュー" aria-keyshortcuts="Control+Alt+Home" title="セッションメニュー (Ctrl + Alt + Home)" data-icon="settings"></button>
+    </nav>
+  </header>
+  <section popover id="session-menu" aria-label="セッションメニュー">
+    <h2>表示とマウス</h2>
+    <button id="fit" aria-pressed="true"><span data-icon="fit"></span>画面に合わせる<span class="switch"></span></button>
+    <button id="lock" aria-pressed="false"><span data-icon="pointer"></span>マウスをキャプチャ<span class="switch"></span></button>
+    <h2>Windows に送る</h2>
+    <button id="win">スタートを開く<kbd>Win</kbd></button>
+    <button data-shortcut="run">ファイル名を指定して実行<kbd>Win + R</kbd></button>
+    <button data-shortcut="switch">アプリを切り替え<kbd>Alt + Tab</kbd></button>
+    <button data-shortcut="secure">セキュリティ画面<kbd>Ctrl + Alt + Del</kbd></button>
+    <div class="diagnostics"><span>マウス入力</span><output id="metrics" aria-live="off" title="ブラウザの移動回数と QEMU が応答した移動番号"></output></div>
+  </section>
+  <main id="stage"><div id="frame"><div id="display" inert></div><div id="surface" tabindex="-1"><textarea id="ime" rows="1" wrap="off" aria-label="Windows の画面操作・IME 入力" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea></div><span id="marker" hidden></span>
+    <div id="walkthrough" hidden>
+      <div id="demo-caption" hidden><span id="demo-text" role="status" aria-atomic="true"></span><span class="demo-track" aria-hidden="true"><i id="demo-time"></i></span></div>
+      <span id="demo-pointer" aria-hidden="true"></span>
+    </div>
+  </div></main>
+  <div id="notice" role="status"></div>
+  <dialog id="editor" aria-labelledby="editor-title">
+    <form method="dialog">
+      <div class="dialoghead"><span class="device" data-icon="type"></span><h2 id="editor-title">日本語入力</h2><button value="cancel" aria-label="閉じる" data-icon="close"></button></div>
+      <textarea id="draft" placeholder="Windows に送るテキストを入力…" aria-label="送信するテキスト"></textarea>
+      <div class="dialogfoot"><small>⌘ / Ctrl + Enter で送信</small><button type="button" id="send">Windows に送信<span data-icon="arrow"></span></button></div>
+    </form>
+  </dialog>
+  <script type="module" src="/ui/app.js"></script>
+</body>
+</html>

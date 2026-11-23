@@ -1,0 +1,10 @@
+[Unit]
+Description=Windows HTML5 console
+
+[Service]
+ExecStart=%h/.local/bin/windows-console-web
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

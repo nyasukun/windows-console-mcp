@@ -1,0 +1,31 @@
+# Private VM state, media, captures and local packaging
+/state*/
+/runtime/
+/packages/
+*.iso
+*.qcow2
+*.vhd*
+*.img
+*.fd
+*.deb
+*.sock
+*.ppm
+*.png
+vnc-password
+.env
+.env.*
+*.pem
+*.key
+
+# Superseded local VNC prototypes
+/Dockerfile.spice
+/console.sh
+/run-vm.sh
+/start.sh
+/start-novnc.sh
+
+# Generated language tooling
+__pycache__/
+*.py[cod]
+.venv/
+node_modules/
