@@ -1,16 +1,19 @@
-"""One duplex screen/input stream per stdio client, with latest-frame backpressure."""
+"""One duplex screen/input stream per MCP session, with latest-frame backpressure."""
 import asyncio
 import hashlib
 import json
 import uuid
 from typing import Annotated, Literal
 
+import aiohttp
+from anyio import CancelScope
 from mcp import types
 from mcp.server.fastmcp import Image
 from mcp.server.stdio import stdio_server
 from pydantic import AnyUrl, Field
 from typing_extensions import TypedDict
 
+from demo_frame import demo_jpeg
 from live_screen import frames, jpeg
 
 
@@ -40,61 +43,152 @@ class Wheel(TypedDict):
 Events = Annotated[list[Move | Key | Button | Wheel], Field(min_length=1, max_length=256)]
 
 
+class FrameView:
+    def __init__(self, uri):
+        self.uri = uri
+        self.sequence = 0
+        self.frame = None
+        self.size = self.native = None
+        self.timestamp_ms = 0
+        self.subscriber = None
+        self.notified = False
+
+    async def notify(self):
+        if self.subscriber and not self.notified:
+            self.notified = True
+            await self.subscriber.send_resource_updated(AnyUrl(self.uri))
+
+
+View = Literal['bare', 'demo']
+
+
 class LiveStream:
-    def __init__(self, connect):
+    def __init__(self, connect, views):
         self.id = uuid.uuid4().hex
-        self.uri = f'windows-console://live/{self.id}/frame'
+        uri = f'windows-console://live/{self.id}/frame'
+        names = ('bare', 'demo') if views == 'both' else (views,)
+        self.views = {name: FrameView(uri if name == 'bare' else uri + '/demo') for name in names}
+        self.primary = names[0]
         self.connect = connect
         self.changed = asyncio.Condition()
+        self.repaint = asyncio.Event()
+        self.canvas = self.step = None
+        self.deadline = 0
+        self.demo_ready = asyncio.Event()
+        self.started_at = asyncio.get_running_loop().time()
         self.input_lock = asyncio.Lock()
-        self.input_seq = self.seq = 0
-        self.frame = None
+        self.input_seq = 0
         self.last_ack = self.last_request = None
         self.closed = False
         self.problem = None
-        self.client = self.ws = self.task = self.subscriber = None
-        self.notified = False
+        self.client = self.ws = self.task = None
 
-    def metadata(self):
-        return dict(stream_id=self.id, frame_sequence=self.seq, native_size=self.native,
-                    image_size=self.dimensions, frame_uri=self.uri)
+    def get_view(self, name=None):
+        try:
+            return self.views[name or self.primary]
+        except KeyError:
+            raise ValueError(f'View {name!r} was not enabled by console_stream_open') from None
+
+    def metadata(self, name=None):
+        view = self.get_view(name)
+        return dict(stream_id=self.id, view=name or self.primary, frame_sequence=view.sequence,
+                    timestamp_ms=view.timestamp_ms, native_size=view.native,
+                    image_size=view.size, frame_uri=view.uri)
+
+    async def publish(self, view, encoded, native):
+        frame, size = encoded
+        if view.frame == frame and view.native == native:
+            return
+        async with self.changed:
+            view.frame, view.size, view.native = frame, size, native
+            view.sequence += 1
+            view.timestamp_ms = round((asyncio.get_running_loop().time() - self.started_at) * 1000)
+            self.changed.notify_all()
+        await view.notify()
 
     async def capture(self, fps, width):
+        async for canvas in frames(fps):
+            if 'demo' in self.views:
+                # RFB updates its image in place after this iteration returns.
+                self.canvas = canvas.copy()
+                self.repaint.set()
+            if 'bare' in self.views:
+                await self.publish(self.views['bare'], await asyncio.to_thread(jpeg, canvas, width), canvas.size)
+        raise RuntimeError('Display stream disconnected')
+
+    async def watch_demo(self):
+        async with self.connect() as client:
+            async with client.get('http://localhost/walkthrough',
+                                  timeout=aiohttp.ClientTimeout(sock_connect=5, sock_read=25)) as response:
+                response.raise_for_status()
+                buffer = bytearray()
+                async for chunk in response.content.iter_any():
+                    buffer.extend(chunk)
+                    while (end := buffer.find(b'\n\n')) >= 0:
+                        message = bytes(buffer[:end])
+                        del buffer[:end + 2]
+                        if message.startswith(b'event: step\ndata: '):
+                            self.step = json.loads(message.split(b'\n', 1)[1][6:])
+                            remaining = self.step['remaining_ms'] / 1000 if self.step else 0
+                            self.deadline = asyncio.get_running_loop().time() + remaining
+                            self.demo_ready.set()
+                            self.repaint.set()
+                        elif message.startswith(b'event: pointer\ndata: ') and self.step:
+                            self.step = dict(self.step, pointer=json.loads(message.split(b'\n', 1)[1][6:]))
+                            self.repaint.set()
+        raise RuntimeError('Walkthrough feed disconnected')
+
+    async def render_demo(self, fps, width):
+        await self.demo_ready.wait()
+        loop = asyncio.get_running_loop()
+        while True:
+            await self.repaint.wait()
+            self.repaint.clear()
+            canvas = self.canvas
+            if canvas is None:
+                continue
+            began = loop.time()
+            remaining = self.deadline - began
+            encoded = await asyncio.to_thread(demo_jpeg, canvas, width, self.step, remaining)
+            await self.publish(self.views['demo'], encoded, canvas.size)
+            if self.step and self.step['text'] and remaining > 0:
+                # Render the countdown even when the guest framebuffer is idle.
+                self.repaint.set()
+            await asyncio.sleep(max(0, 1/fps - (loop.time() - began)))
+
+    async def run_capture(self, fps, width):
         try:
-            async for canvas in frames(fps):
-                frame, dimensions = await asyncio.to_thread(jpeg, canvas, width)
-                if frame == self.frame and self.native == canvas.size:
-                    continue
-                async with self.changed:
-                    self.seq += 1
-                    self.frame, self.dimensions, self.native = frame, dimensions, canvas.size
-                    self.changed.notify_all()
-                if self.subscriber and not self.notified:
-                    self.notified = True
-                    await self.subscriber.send_resource_updated(AnyUrl(self.uri))
-        except Exception as exc:
+            async with asyncio.TaskGroup() as tasks:
+                tasks.create_task(self.capture(fps, width))
+                if 'demo' in self.views:
+                    tasks.create_task(self.watch_demo())
+                    tasks.create_task(self.render_demo(fps, width))
+        except ExceptionGroup as group:
+            exc = group.exceptions[0]
             self.problem = str(exc) or 'Display stream disconnected'
         finally:
             async with self.changed:
                 self.changed.notify_all()
-            if self.problem and self.subscriber and not self.closed:
-                # Wake a resource-only reader so its next read reports the disconnect.
-                try:
-                    await self.subscriber.send_resource_updated(AnyUrl(self.uri))
-                except (OSError, RuntimeError):
-                    pass
+            if self.problem and not self.closed:
+                for view in self.views.values():
+                    view.notified = False
+                    try:
+                        await view.notify()
+                    except (OSError, RuntimeError):
+                        pass
 
     async def start(self, fps, width):
-        self.task = asyncio.create_task(self.capture(fps,width))
-        await self.wait(0, 10)
-        if not self.frame:
-            raise TimeoutError('No initial display frame received')
+        self.task = asyncio.create_task(self.run_capture(fps, width))
+        for view in self.views.values():
+            await self.wait(view, 0, 10)
+            if not view.frame:
+                raise TimeoutError('No initial display frame received')
 
-    async def wait(self, after, timeout):
+    async def wait(self, view, after, timeout):
         async with self.changed:
             try:
                 async with asyncio.timeout(timeout):
-                    await self.changed.wait_for(lambda: self.seq > after or self.problem or self.closed)
+                    await self.changed.wait_for(lambda: view.sequence > after or self.problem or self.closed)
             except TimeoutError:
                 pass
             if self.problem or self.closed:
@@ -124,7 +218,7 @@ class LiveStream:
                     self.changed.notify_all()
                 raise
             self.input_seq, self.last_request = seq, signature
-            self.last_ack = dict(ack, input_sequence=seq, frame_sequence=self.seq)
+            self.last_ack = dict(ack, input_sequence=seq, frame_sequence=self.get_view().sequence)
             return self.last_ack
 
     async def close(self):
@@ -151,31 +245,38 @@ def install(mcp, connection):
 
     @mcp.tool()
     async def console_stream_open(max_fps: Annotated[int, Field(ge=1,le=30)]=12,
-                                  max_width: Annotated[int, Field(ge=160,le=4096)]=1280) -> dict:
-        """Start persistent incremental display capture. Subscribe to frame_uri or call console_stream_next."""
+                                  max_width: Annotated[int, Field(ge=160,le=4096)]=1280,
+                                  views: Literal['bare', 'demo', 'both']='bare') -> dict:
+        """Start incremental JPEG capture: bare, demo with annotations, or both.
+        Each enabled view has its own frame_uri and frame_sequence in the views map.
+        Subscribe to its URI or pass view to console_stream_next. Both share one input stream.
+        """
         nonlocal active
         async with lifecycle:
             if active:
                 raise ValueError('Close the current stream first')
-            item = LiveStream(connection)
+            item = LiveStream(connection, views)
             try:
                 await item.start(max_fps, max_width)
             except BaseException:
                 await item.close()
                 raise
             active = item
-            return dict(item.metadata(), next_input_sequence=1, max_fps=max_fps)
+            return dict(item.metadata(), next_input_sequence=1, max_fps=max_fps,
+                        views={name: item.metadata(name) for name in item.views})
 
     @mcp.tool()
     async def console_stream_next(stream_id: str, after: Annotated[int, Field(ge=0)]=0,
-                                  timeout_ms: Annotated[int, Field(ge=0,le=30000)]=5000) -> types.CallToolResult:
+                                  timeout_ms: Annotated[int, Field(ge=0,le=30000)]=5000,
+                                  view: View | None = None) -> types.CallToolResult:
         """Wait for a newer frame. Returns JPEG and metadata, or metadata only on timeout."""
         item = stream(stream_id)
-        await item.wait(after, timeout_ms / 1000)
-        changed = item.seq > after
-        content = [types.TextContent(type='text', text=json.dumps(dict(item.metadata(), changed=changed)))]
+        selected = item.get_view(view)
+        await item.wait(selected, after, timeout_ms / 1000)
+        changed = selected.sequence > after
+        content = [types.TextContent(type='text', text=json.dumps(dict(item.metadata(view), changed=changed)))]
         if changed:
-            content.append(Image(data=item.frame, format='jpeg').to_image_content())
+            content.append(Image(data=selected.frame, format='jpeg').to_image_content())
         return types.CallToolResult(content=content)
 
     @mcp.tool()
@@ -195,20 +296,30 @@ def install(mcp, connection):
             active = None
         return {'closed':True}
 
-    @mcp.resource('windows-console://live/{stream_id}/frame', mime_type='image/jpeg')
-    def latest_frame(stream_id: str) -> bytes:
+    def read_frame(stream_id, view):
         item = stream(stream_id)
         if item.problem:
             raise RuntimeError(item.problem)
-        item.notified = False
-        return item.frame
+        selected = item.get_view(view)
+        selected.notified = False
+        return selected.frame
+
+    @mcp.resource('windows-console://live/{stream_id}/frame', mime_type='image/jpeg')
+    def latest_frame(stream_id: str) -> bytes:
+        return read_frame(stream_id, 'bare')
+
+    @mcp.resource('windows-console://live/{stream_id}/frame/demo', mime_type='image/jpeg')
+    def latest_demo_frame(stream_id: str) -> bytes:
+        return read_frame(stream_id, 'demo')
 
     low = mcp._mcp_server
 
     def lookup(uri):
-        if active is None or str(uri) != active.uri:
-            raise ValueError('Unknown live frame resource')
-        return active
+        if active:
+            for view in active.views.values():
+                if str(uri) == view.uri:
+                    return view
+        raise ValueError('Unknown live frame resource')
 
     @low.subscribe_resource()
     async def subscribe(uri):
@@ -222,14 +333,17 @@ def install(mcp, connection):
         item.subscriber = None
         item.notified = False
 
-    async def run():
+    async def run(reader=None, writer=None):
+        if reader is None:
+            async with stdio_server() as streams:
+                return await run(*streams)
         options = low.create_initialization_options()
         options.capabilities.resources.subscribe = True
         try:
-            async with stdio_server() as (reader, writer):
-                await low.run(reader, writer, options)
+            await low.run(reader, writer, options)
         finally:
             if active:
-                await active.close()
+                with CancelScope(shield=True):
+                    await active.close()
 
     return run

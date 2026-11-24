@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT/'mcp')]
 import live
 from stream_input import batch_input
+from walkthrough import Walkthrough
 
 
 async def serve_fixture():
@@ -36,8 +37,17 @@ async def serve_fixture():
 
     live.frames = frames
     app = web.Application()
+    demo = Walkthrough()
+    mcp = FastMCP('test-live')
+
+    @mcp.tool()
+    async def show_demo():
+        demo.show(dict(text='スタートメニュー', x=8000, y=10000,
+                       pointer_x=6000, pointer_y=8000, duration_seconds=1.5))
+
     app['shared'] = {'input_lock':asyncio.Lock(), 'held':False, 'monitor':Monitor()}
     app.router.add_get('/stream-input', batch_input)
+    app.router.add_get('/walkthrough', demo.events)
     import tempfile
     with tempfile.TemporaryDirectory() as root:
         path = str(Path(root)/'stream.sock')
@@ -47,8 +57,9 @@ async def serve_fixture():
             await web.UnixSite(runner,path).start()
             def connect():
                 return aiohttp.ClientSession(connector=aiohttp.UnixConnector(path=path))
-            await live.install(FastMCP('test-live'),connect)()
+            await live.install(mcp,connect)()
         finally:
+            demo.clear()
             await runner.cleanup()
 
 
@@ -86,6 +97,49 @@ class StreamProtocol(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ack['held'],0)
             await client.unsubscribe_resource(uri)
             await call('console_stream_close',stream_id=ident)
+
+    async def test_demo_updates_independently_on_static_screen(self):
+        notifications = asyncio.Queue()
+
+        async def receive(msg):
+            if isinstance(msg, types.ServerNotification) and isinstance(msg.root, types.ResourceUpdatedNotification):
+                notifications.put_nowait(str(msg.root.params.uri))
+
+        params = StdioServerParameters(command=sys.executable, args=[__file__, '--serve'])
+        async with stdio_client(params) as streams, ClientSession(*streams, message_handler=receive) as client:
+            await client.initialize()
+
+            async def call(name, **kwargs):
+                result = await client.call_tool(name, kwargs)
+                self.assertFalse(result.isError, result.content)
+                return result.content
+
+            opened = json.loads((await call('console_stream_open', views='both', max_width=320))[0].text)
+            ident = opened['stream_id']
+            bare, demo = (AnyUrl(opened['views'][name]['frame_uri']) for name in ('bare', 'demo'))
+            for uri in (bare, demo):
+                await client.subscribe_resource(uri)
+            pristine = (await client.read_resource(bare)).contents[0].blob
+            self.assertEqual((await client.read_resource(demo)).contents[0].blob, pristine)
+            await call('show_demo')
+            self.assertEqual(await asyncio.wait_for(notifications.get(), 2), str(demo))
+            annotated = (await client.read_resource(demo)).contents[0].blob
+            self.assertNotEqual(annotated, pristine)
+            self.assertEqual(await asyncio.wait_for(notifications.get(), 2), str(demo))
+            countdown = (await client.read_resource(demo)).contents[0].blob
+            self.assertNotIn(countdown, (annotated, pristine))
+
+            seq = 1
+            async with asyncio.timeout(4):
+                while True:
+                    meta, frame = await call('console_stream_next', stream_id=ident, view='demo', after=seq)
+                    seq = json.loads(meta.text)['frame_sequence']
+                    if frame.data == pristine:
+                        break
+            bare_result = await call('console_stream_next', stream_id=ident, view='bare', after=1, timeout_ms=0)
+            self.assertFalse(json.loads(bare_result[0].text)['changed'])
+            self.assertEqual((await client.read_resource(bare)).contents[0].blob, pristine)
+            await call('console_stream_close', stream_id=ident)
 
 
 if __name__ == '__main__':

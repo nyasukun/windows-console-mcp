@@ -229,6 +229,7 @@ async def admin_site(app):
     private.router.add_post('/control/{op}', administrative)
     private.router.add_get('/input', input_session)
     private.router.add_get('/stream-input', batch_input)
+    private.router.add_get('/walkthrough', app['shared']['demo'].events)
     runner = web.AppRunner(private, access_log=None, shutdown_timeout=2)
     await runner.setup()
     site = web.UnixSite(runner, str(CONTROL))

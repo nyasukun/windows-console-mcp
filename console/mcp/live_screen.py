@@ -94,10 +94,15 @@ async def frames(fps):
             await asyncio.sleep(1/fps)
 
 
-def jpeg(canvas, max_width):
+def fit(canvas, max_width):
     w,h = canvas.size
     if w > max_width:
         canvas = canvas.resize((max_width, max(1, round(h*max_width/w))), Image.Resampling.BILINEAR)
+    return canvas
+
+
+def jpeg(canvas, max_width):
+    canvas = fit(canvas, max_width)
     out = io.BytesIO()
     canvas.save(out, format='JPEG', quality=78)
     return out.getvalue(), canvas.size

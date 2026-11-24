@@ -44,6 +44,7 @@ codex mcp add windows-console -- ssh -T -o BatchMode=yes vm-host .local/bin/wind
 | 操作 | MCP ツールと使い方 |
 | --- | --- |
 | VM の状態と電源 | `vm_status` で Docker と QEMU の状態を取得。`vm_power` に `start`、`shutdown`、`restart` を指定。終了は ACPI の電源ボタン経由で、再起動は終了を確認してから起動します。Windows の電源ポリシーや保存確認で終了が保留された場合はタイムアウトを返します。 |
+| インターネット接続 | `vm_internet_status` で現在と次回起動時の設定を確認。`vm_set_internet` に `{"enabled":true}` または `{"enabled":false}` を渡すと、外向きの IPv4 NAT を次回起動から切り替えます。稼働中の VM にすぐ反映する場合は `"apply_now":true` も指定します。正常終了がタイムアウトした場合は設定が次回起動用に残ります。ファイル転送用 URL はどちらの設定でも利用できます。 |
 | イメージ選択 | `list_images` の `images[].id` を `select_image` に渡します。対象はプロジェクト直下と `state-clean` 直下の ISO です。実行中は CD ドライブに交換し、停止中は次回起動用に選択します。`current` と `next_boot` は QEMU 側のパスです。起動順は OS ディスクが先です。 |
 | 画面とマウス | `console_screen` はゲストの PNG を返します。`console_pointer` は移動、クリック、ダブルクリック、ホイールに対応。`console_drag` は左ボタンでドラッグします。PNG の幅 W、高さ H のピクセル (x, y) は `round(x*32767/(W-1))`、`round(y*32767/(H-1))` に換算します。 |
 | キー・日本語・コピー | `console_keys` は例として `["ctrl","a"]`、`["ret"]`。`console_text` は日本語を Unicode 入力し、`method="paste"` で貼り付けます。`console_copy_selection` は選択した文字列を返します。テキスト操作にはサインイン中の COM1 ヘルパーが必要です。 |
@@ -51,6 +52,19 @@ codex mcp add windows-console -- ssh -T -o BatchMode=yes vm-host .local/bin/wind
 | コンソール設定 | `console_settings` で待受ポート、サービス状態、URL、SSH 転送引数を取得。`configure_console` に 1024〜65535 の `port` を指定すると、Web サービスを再起動して疎通を確認します。ブラウザは返された URL に再接続します。 |
 
 管理用 Unix ソケットは `state-clean/console-admin.sock`（0600）です。MCP 入力とブラウザ入力は同じコンソールサーバーで順序を管理します。ブラウザでキーやマウスボタンを押している間に MCP が操作を要求した場合は、離してから再試行します。スクリーンショットの一時ファイルは応答生成時に削除します。
+
+### LAN から SSE で接続する
+
+MCP クライアントでトランスポートに **SSE**、URL に `https://<ホストのLAN IP>:6084/sse` を指定します。SSE 接続とメッセージ送信の両方に `Authorization: Bearer <トークン>` ヘッダーを付け、ホストのサーバー証明書をクライアントで信頼します。
+
+ホスト側では LAN IP とサブネット、IP を SAN に含む TLS 証明書と秘密鍵、ランダムなトークンを指定して起動します。次の IP は例です。
+
+```sh
+console/mcp/start.sh --sse --bind 192.168.1.10/24 \
+  --token-file /path/to/token --cert /path/to/server.pem --key /path/to/server-key.pem
+```
+
+トークンには `openssl rand -hex 32` で生成した値を使えます。トークンファイルと秘密鍵はホストユーザーだけが読める場所に置き、クライアントにはトークンと公開証明書を渡します。
 
 ### ブラウザでウォークスルーデモを見せる
 
@@ -68,7 +82,7 @@ codex mcp add windows-console -- ssh -T -o BatchMode=yes vm-host .local/bin/wind
 - 座標はゲスト画面の左上が `(0, 0)`、右下が `(32767, 32767)` です。`x` と `y` は説明枠の左上を指定します。右端・下端では枠全体が見える位置に自動調整します。
 - `pointer_x` と `pointer_y` を省くと、最後にコンソールで操作したマウス位置を指します。最初の操作前は説明枠の位置を指します。表示中に `console_pointer` などでマウスを動かすと、強調カーソルが追従します。デモ表示だけで Windows のマウス位置や入力フォーカスが変わることはありません。
 - 表示時間は秒単位で、小数も指定できます。既定は5秒です。説明枠の下の細いバーが時間とともに短くなり、時間が来ると枠とカーソルが消えます。途中でブラウザを開き直すと残り時間から表示します。
-- 次の `console_demo_show` で表示を差し替えられます。`text` を空文字列にするとカーソルだけを表示します。`console_demo_clear` は表示を即座に終了します。注釈はブラウザ上に合成するため、MCP で取得するゲストの画像には含まれません。
+- 次の `console_demo_show` で表示を差し替えられます。`text` を空文字列にするとカーソルだけを表示します。`console_demo_clear` は表示を即座に終了します。録画にはブラウザの画面か、MCP の `demo` 映像を使えます。
 
 ## MCP でファイルを転送する
 
@@ -93,7 +107,10 @@ uv run --project console/mcp python console/mcp/files.py --ssh vm-host discard T
 
 ## MCP の画面ストリームと連続操作
 
-同じ stdio 接続で `console_stream_open(max_fps=12, max_width=1280)` を呼ぶと、`stream_id`、画面リソースの `frame_uri`、元と配信時の解像度、最初のフレーム番号を取得できます。映像にはホスト内の QEMU ディスプレイの共有・読み取り専用 RFB 接続を使い、矩形の差分をメモリ上で合成して JPEG にします。入力は従来のコンソールと同じ QMP 経路を使います。SSH 転送ポートの追加は不要です。
+stdio または SSE の同じ MCP 接続で `console_stream_open(max_fps=12, max_width=1280)` を呼ぶと、`stream_id`、画面リソースの `frame_uri`、元と配信時の解像度、最初のフレーム番号を取得できます。映像にはホスト内の QEMU ディスプレイの共有・読み取り専用 RFB 接続を使い、矩形の差分をメモリ上で合成して JPEG にします。入力は従来のコンソールと同じ QMP 経路を使います。SSH 転送ポートの追加は不要です。
+
+- `console_stream_open(views="both")` で、素の `bare` と吹き出し・強調カーソル・残り時間バーを合成した `demo` を同時に取得できます。`views="demo"` はデモ映像のみ、既定の `views="bare"` は素の映像のみです。デモの文字描画にはホストの `fonts-noto-cjk` を使います。別の日本語TrueType/OpenTypeフォントは `WINDOWS_CONSOLE_DEMO_FONT` で指定できます。
+- 戻り値の `views.bare.frame_uri` と `views.demo.frame_uri` は別々に購読できます。ツールで取得する場合は `console_stream_next(stream_id, view="demo", after=0)` のように指定し、次回の `after` には同じ映像の `frame_sequence` を使います。入力と終了は共通の `stream_id` を使います。録画時は、ストリームを開いてからの経過時間を示す `timestamp_ms` で両映像を揃えられます。
 
 - リソース購読に対応する MCP クライアントは `resources/subscribe(frame_uri)` のあと初回の `resources/read(frame_uri)` を実行します。その後は `notifications/resources/updated` を受けて最新の JPEG を読みます。未読通知と画像は各1件にまとめます。
 - ツールのみを使うクライアントは `console_stream_next(stream_id, after=0)` で初回の JPEG を取得します。以降は最後に受け取った `frame_sequence` を `after` に渡すと更新まで待機し、`timeout_ms` の間に変更がなければメタデータだけが返ります。標準設定の最大更新レートは 12 fps、指定範囲は 1〜30 fps です。表示更新、画像サイズ、SSH 回線、クライアントの処理速度によって実レートは変わります。

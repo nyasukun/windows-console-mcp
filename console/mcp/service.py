@@ -24,7 +24,12 @@ UNIT = 'windows-html-console.service'
 PROJECT = ROOT.parent
 SELECTION = STATE / 'selected-install.iso'
 Coord = Annotated[int, Field(ge=0, le=32767)]
-mcp = FastMCP('Windows VM Console')
+tools = []
+
+
+def export_tool(func):
+    tools.append(func)
+    return func
 
 
 async def host(*argv, timeout=30):
@@ -97,7 +102,7 @@ async def chord(send, keys):
         await send('key', key=key, down=False)
 
 
-@mcp.tool()
+@export_tool
 async def vm_status() -> dict:
     """Get the configured VM container and QEMU run state."""
     state = await container_state()
@@ -126,25 +131,86 @@ async def wait_for_vm(target, timeout):
     raise RuntimeError(f'Timed out waiting for {target}. Check vm_status and the console.')
 
 
-@mcp.tool()
+async def change_power(action, state, timeout_seconds):
+    if state not in ('running', 'exited', 'created'):
+        raise RuntimeError(f'Unsupported current container state: {state}')
+    if action != 'start' and state == 'running':
+        await control('powerdown')
+        await wait_for_vm('exited', timeout_seconds)
+        state = 'exited'
+    if action != 'shutdown':
+        if state != 'running':
+            await host('docker', 'start', VM)
+        await wait_for_vm('running', timeout_seconds)
+
+
+TimeoutSeconds = Annotated[int, Field(ge=5, le=180)]
+
+
+@export_tool
 async def vm_power(action: Literal['start', 'shutdown', 'restart'],
-                   timeout_seconds: Annotated[int, Field(ge=5, le=180)] = 60) -> dict:
+                   timeout_seconds: TimeoutSeconds = 60) -> dict:
     """Start the VM or request ACPI shutdown. Restart starts after confirmed shutdown.
     Windows may require a user to close applications. Timeouts do not force a stop.
     """
     with management_lock():
-        state = await container_state()
+        await change_power(action, await container_state(), timeout_seconds)
+        return await vm_status()
+
+
+def running_internet_enabled(pid):
+    try:
+        args = Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
+    except OSError:
+        return None
+    for flag, spec in zip(args, args[1:]):
+        if flag != b'-netdev':
+            continue
+        options = spec.split(b',')
+        if options[0] == b'user' and b'id=transfernet' in options:
+            restriction = next((option for option in options if option.startswith(b'restrict=')),
+                               b'restrict=off')
+            return {b'restrict=off': True, b'restrict=on': False}.get(restriction)
+    return None
+
+
+@export_tool
+async def vm_internet_status() -> dict:
+    """Report the running VM's outbound NAT setting and the saved setting for its next boot.
+    A null current_enabled indicates the VM is stopped or its configuration could not be read.
+    """
+    state, pid = (await host('docker', 'inspect', '--format', '{{.State.Status}} {{.State.Pid}}', VM)).split()
+    current = running_internet_enabled(int(pid)) if state == 'running' else None
+    next_boot = (STATE / 'internet-enabled').is_file()
+    return {'container': state, 'current_enabled': current, 'next_boot_enabled': next_boot,
+            'restart_required': state == 'running' and current != next_boot}
+
+
+@export_tool
+async def vm_set_internet(enabled: bool, apply_now: bool = False,
+                          timeout_seconds: TimeoutSeconds = 60) -> dict:
+    """Enable or disable outbound IPv4 NAT. Saves the setting for the next start.
+    apply_now gracefully restarts a running VM only if needed. A stopped VM stays stopped.
+    If restart fails, the saved choice remains pending. File transfer remains available.
+    """
+    with management_lock():
+        info = await vm_internet_status()
+        state = info['container']
         if state not in ('running', 'exited', 'created'):
             raise RuntimeError(f'Unsupported current container state: {state}')
-        if action != 'start' and state == 'running':
-            await control('powerdown')
-            await wait_for_vm('exited', timeout_seconds)
-            state = 'exited'
-        if action != 'shutdown':
-            if state != 'running':
-                await host('docker', 'start', VM)
-            await wait_for_vm('running', timeout_seconds)
-        return await vm_status()
+        marker = STATE / 'internet-enabled'
+        if enabled:
+            marker.touch(mode=0o600, exist_ok=True)
+        else:
+            marker.unlink(missing_ok=True)
+        if apply_now and state == 'running' and info['current_enabled'] != enabled:
+            await change_power('restart', state, timeout_seconds)
+            info = await vm_internet_status()
+            if info['current_enabled'] != enabled:
+                raise RuntimeError('The VM restarted, but the requested internet setting could not be verified')
+            return info
+        return dict(info, next_boot_enabled=enabled,
+                    restart_required=state == 'running' and info['current_enabled'] != enabled)
 
 
 def catalog():
@@ -162,7 +228,7 @@ def next_medium():
     return '/media/windows11.iso'
 
 
-@mcp.tool()
+@export_tool
 async def list_images() -> dict:
     """List selectable installation and tools ISOs with current and next-boot media."""
     result = {'images': [{'id': key, 'bytes': path.stat().st_size}
@@ -173,7 +239,7 @@ async def list_images() -> dict:
     return result
 
 
-@mcp.tool()
+@export_tool
 async def select_image(image_id: str) -> dict:
     """Mount a listed ISO on the installation CD drive and select it for subsequent starts."""
     with management_lock():
@@ -217,13 +283,13 @@ async def select_image(image_id: str) -> dict:
                 'current':(await control('medium'))['path'] if state == 'running' else None}
 
 
-@mcp.tool()
+@export_tool
 async def console_screen() -> Image:
     """Capture the current guest framebuffer at native resolution as a PNG."""
     return Image(data=await control('screen'), format='png')
 
 
-@mcp.tool()
+@export_tool
 async def console_demo_show(x: Coord, y: Coord, text: str,
                             duration_seconds: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 5,
                             pointer_x: Coord | None = None, pointer_y: Coord | None = None) -> dict:
@@ -239,13 +305,13 @@ async def console_demo_show(x: Coord, y: Coord, text: str,
                          pointer_x=pointer_x, pointer_y=pointer_y)
 
 
-@mcp.tool()
+@export_tool
 async def console_demo_clear() -> dict:
     """Immediately dismiss the current walkthrough caption and pointer in the browser console."""
     return await control('demo-clear')
 
 
-@mcp.tool()
+@export_tool
 async def console_pointer(x: Coord, y: Coord,
                           action: Literal['move', 'click', 'double_click', 'wheel_up', 'wheel_down']='move',
                           button: Literal['left', 'middle', 'right']='left') -> str:
@@ -262,7 +328,7 @@ async def console_pointer(x: Coord, y: Coord,
     return 'Pointer events acknowledged'
 
 
-@mcp.tool()
+@export_tool
 async def console_drag(start_x: Coord, start_y: Coord, end_x: Coord, end_y: Coord) -> str:
     """Drag with the left mouse button between two absolute tablet positions (0..32767)."""
     async with console_input() as send:
@@ -274,7 +340,7 @@ async def console_drag(start_x: Coord, start_y: Coord, end_x: Coord, end_y: Coor
     return 'Drag acknowledged'
 
 
-@mcp.tool()
+@export_tool
 async def console_keys(keys: Annotated[list[str], Field(min_length=1, max_length=8)]) -> str:
     """Press and release a QEMU key chord, e.g. ["ctrl","a"], ["meta_l","r"], ["ret"]."""
     if len(set(keys)) != len(keys) or any(key not in KEYS for key in keys):
@@ -284,7 +350,7 @@ async def console_keys(keys: Annotated[list[str], Field(min_length=1, max_length
     return 'Key events acknowledged'
 
 
-@mcp.tool()
+@export_tool
 async def console_text(text: str, method: Literal['type','paste']='type') -> str:
     """Enter Unicode at the Windows focus using the signed-in user's COM1 helper.
     Paste updates the guest clipboard. Limit 64 KiB UTF-8.
@@ -296,14 +362,14 @@ async def console_text(text: str, method: Literal['type','paste']='type') -> str
     return 'Text acknowledged by Windows'
 
 
-@mcp.tool()
+@export_tool
 async def console_copy_selection() -> str:
     """Copy the selected text in the guest and return it via the console bridge."""
     async with console_input() as send:
         return await send('copy')
 
 
-@mcp.tool()
+@export_tool
 async def console_open_terminal(shell: Literal['powershell', 'cmd']='powershell') -> str:
     """Open a visible guest shell via Windows Run. Check console_screen for readiness."""
     async with console_input() as send:
@@ -314,7 +380,7 @@ async def console_open_terminal(shell: Literal['powershell', 'cmd']='powershell'
     return 'Terminal launch submitted'
 
 
-@mcp.tool()
+@export_tool
 async def console_cli(line: str) -> str:
     """Type one command and press Enter in the focused guest terminal.
     Inspect console_screen for output, or select output and call console_copy_selection.
@@ -327,7 +393,7 @@ async def console_cli(line: str) -> str:
     return 'Command submitted to the focused guest terminal'
 
 
-@mcp.tool()
+@export_tool
 async def console_settings() -> dict:
     """Read the configured port, live port, service state and SSH forwarding arguments."""
     port = configured_port()
@@ -355,7 +421,7 @@ async def restart_console(port):
             await asyncio.sleep(.2)
 
 
-@mcp.tool()
+@export_tool
 async def configure_console(port: Annotated[int, Field(ge=1024, le=65535)]) -> dict:
     """Set the loopback HTTP port and apply it. Browser clients reconnect after a change."""
     validate_port(port)
@@ -385,21 +451,21 @@ async def prepare_file_server():
         return await control('transfer-server', attach=state == 'running')
 
 
-@mcp.tool()
+@export_tool
 async def file_begin_download(filename: str, size: Annotated[int, Field(ge=0)]) -> dict:
     """Begin MCP client -> VM transfer. Supply exact file size in bytes, then write chunks."""
     token = await asyncio.to_thread(transfers.create, 'to_vm', filename, size)
     return transfers.describe(token)
 
 
-@mcp.tool()
+@export_tool
 async def file_write_chunk(transfer_id: str, offset: Annotated[int, Field(ge=0)],
                            data_base64: str) -> dict:
     """Append up to max_chunk raw bytes encoded as base64. Identical retries are accepted."""
     return await asyncio.to_thread(transfers.write_chunk, transfer_id, offset, data_base64)
 
 
-@mcp.tool()
+@export_tool
 async def file_publish(transfer_id: str) -> dict:
     """Finish the file, start the guest HTTP server, and return its passwordless download URL."""
     await asyncio.to_thread(transfers.publish, transfer_id)
@@ -407,7 +473,7 @@ async def file_publish(transfer_id: str) -> dict:
     return dict(transfers.describe(transfer_id), **network)
 
 
-@mcp.tool()
+@export_tool
 async def file_request_upload() -> dict:
     """Issue a passwordless URL for selecting and uploading one file in the VM browser."""
     network = await prepare_file_server()
@@ -415,27 +481,32 @@ async def file_request_upload() -> dict:
     return dict(transfers.describe(token), **network)
 
 
-@mcp.tool()
+@export_tool
 async def file_status(transfer_id: str) -> dict:
     """Get progress and completion; ready VM uploads can be read by offset."""
     return await asyncio.to_thread(transfers.describe, transfer_id)
 
 
-@mcp.tool()
+@export_tool
 async def file_read_chunk(transfer_id: str, offset: Annotated[int, Field(ge=0)],
                           length: Annotated[int, Field(gt=0, le=transfers.CHUNK)] = 49152) -> dict:
     """Read uploaded bytes as base64. Continue from next_offset until eof."""
     return await asyncio.to_thread(transfers.read_chunk, transfer_id, offset, length)
 
 
-@mcp.tool()
+@export_tool
 async def file_discard(transfer_id: str) -> dict:
     """Revoke this URL and remove its staged bytes from the console host."""
     await asyncio.to_thread(transfers.discard, transfer_id)
     return {'removed':True}
 
 
-run_stdio = install_live_stream(mcp, connection)
+def create_session():
+    mcp = FastMCP('Windows VM Console')
+    for tool in tools:
+        mcp.add_tool(tool)
+    return install_live_stream(mcp, connection)
+
 
 if __name__ == '__main__':
-    asyncio.run(run_stdio())
+    asyncio.run(create_session()())

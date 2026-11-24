@@ -29,6 +29,12 @@ if [[ -L selected-install.iso ]]; then
   install_iso=${install_iso//,/,,}
 fi
 
+# The state directory records whether this VM is allowed outbound networking.
+network_restrict=on
+if [[ -f internet-enabled ]]; then
+  network_restrict=off
+fi
+
 exec qemu-system-x86_64 \
   -name 'Windows 11 clean setup' -machine q35,smm=on,accel=kvm -cpu host \
   -smp 4 -m 8G \
@@ -45,7 +51,7 @@ exec qemu-system-x86_64 \
   -serial chardev:consoletext \
   -boot menu=on -device qemu-xhci \
   -device usb-ehci,id=ehci -device usb-tablet,bus=ehci.0 \
-  -netdev 'user,id=transfernet,net=10.77.0.0/24,ipv6=off,restrict=on,guestfwd=tcp:10.77.0.4:80-cmd:/usr/bin/python3 /vm-clean/transfer-relay.py' \
+  -netdev "user,id=transfernet,net=10.77.0.0/24,ipv6=off,restrict=$network_restrict,guestfwd=tcp:10.77.0.4:80-cmd:/usr/bin/python3 /vm-clean/transfer-relay.py" \
   -device e1000e,id=transfernic,netdev=transfernet,mac=52:54:00:77:00:04 \
   "${spice_options[@]}" \
   -object secret,id=vncpass,file=/vm-clean/vnc-password \
