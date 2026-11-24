@@ -42,15 +42,11 @@ codex mcp add windows-console -- ssh -T -o BatchMode=yes vm-host .local/bin/wind
 
 コンテナ名と RFB のホスト側ポートは、既定で `windows11-vm-clean` と `5912` です。変更する場合は `WINDOWS_CONSOLE_VM` と `WINDOWS_CONSOLE_RFB_PORT` を VM 起動時、Web サービス、MCP サーバーの環境で揃えてください。
 
-### 日本語入力とクリップボードを有効にする
+### 日本語入力とクリップボード
 
-Windows にサインインしたら、付属の COM1 ヘルパーをユーザーセッションにインストールします。Ubuntu 側で `genisoimage` を使ってツール ISO を作ります。
+Windows の新規インストールでは、VM に接続した補助 CD を Windows Setup が読み込み、最初の管理者ユーザーのサインイン時に COM1 ヘルパーを自動でインストールします。`launch-vm.sh` と MCP の `vm_power` は新しい QEMU プロセスを起動する際に補助 CD を生成します。
 
-```sh
-genisoimage -J -r -V WINDOWS_CONSOLE -o state-clean/console-setup.iso console/guest/
-```
-
-MCP の `select_image` に `{"image_id":"guest-tools/console-setup.iso"}` を渡し、Windows の CD ドライブから `install.cmd` を実行します。ヘルパーはサインイン時に自動起動します。マウス・物理キー・デモ表示は Windows のインストール画面から利用できます。
+すでにインストール済みの Windows でヘルパーの追加や更新が必要な場合は、補助 CD `CONSOLE_TOOLS` を開き、`install.cmd` を実行します。ヘルパーは以降のサインイン時に自動起動します。マウス・物理キー・デモ表示は Windows のインストール画面から利用できます。
 
 ## デモを表示する
 

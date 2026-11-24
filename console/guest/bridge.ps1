@@ -66,11 +66,22 @@ try {
                         [Windows.Forms.SendKeys]::SendWait('^v')
                     }
                 }
-                'copy' {
-                    $before = [ConsoleBridge.Native]::GetClipboardSequenceNumber()
-                    [Windows.Forms.SendKeys]::SendWait('^c')
-                    for ($i=0; $i -lt 30 -and [ConsoleBridge.Native]::GetClipboardSequenceNumber() -eq $before; $i++) { Start-Sleep -Milliseconds 40 }
-                    if ([ConsoleBridge.Native]::GetClipboardSequenceNumber() -eq $before) { throw 'Select text in Windows first' }
+                'clipboard-write' {
+                    $bytes = [Convert]::FromBase64String($req.data)
+                    if ($bytes.Length -gt 65536) { throw 'Text exceeds 64 KiB' }
+                    if ($bytes.Length -eq 0) {
+                        [Windows.Forms.Clipboard]::Clear()
+                    } else {
+                        [Windows.Forms.Clipboard]::SetText([Text.Encoding]::UTF8.GetString($bytes))
+                    }
+                }
+                { $_ -in 'copy', 'clipboard-read' } {
+                    if ($_ -eq 'copy') {
+                        $before = [ConsoleBridge.Native]::GetClipboardSequenceNumber()
+                        [Windows.Forms.SendKeys]::SendWait('^c')
+                        for ($i=0; $i -lt 30 -and [ConsoleBridge.Native]::GetClipboardSequenceNumber() -eq $before; $i++) { Start-Sleep -Milliseconds 40 }
+                        if ([ConsoleBridge.Native]::GetClipboardSequenceNumber() -eq $before) { throw 'Select text in Windows first' }
+                    }
                     $bytes = [Text.Encoding]::UTF8.GetBytes([Windows.Forms.Clipboard]::GetText())
                     if ($bytes.Length -gt 65536) { throw 'Text exceeds 64 KiB' }
                     $reply.data = [Convert]::ToBase64String($bytes)

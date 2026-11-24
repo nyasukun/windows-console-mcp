@@ -18,8 +18,8 @@ import service
 class InputSharing(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.monitor = AsyncMock()
-        shared = {'monitor': self.monitor, 'browser': asyncio.Lock(),
-                  'input_lock': asyncio.Lock(), 'held':False}
+        shared = {'monitor': self.monitor, 'spice_owner': None,
+                  'input_lock': asyncio.Lock(), 'held': None}
         self.clients = []
         for admin in [False, True]:
             app = web.Application()
@@ -52,6 +52,49 @@ class InputSharing(unittest.IsolatedAsyncioTestCase):
                        if c.args[0] == 'input-send-event']
             self.assertEqual(batches[-2], [server.key_event('ctrl', False)])
             self.assertEqual([event['data']['value'] for event in batches[-1]], [2, 3])
+
+    async def test_second_tab_connects_and_only_owner_releases_input(self):
+        browser, admin = self.clients
+        async with browser.ws_connect('/input') as first, browser.ws_connect('/input') as second:
+            self.assertEqual((await first.receive_json())['display'], 'spice')
+            self.assertEqual((await second.receive_json())['display'], 'frames')
+            await first.send_json(dict(op='key', key='shift', down=True, id='first'))
+            self.assertEqual((await first.receive_json())['id'], 'first')
+            await second.send_json(dict(op='release'))
+            await second.send_json(dict(op='key', key='shift', down=True, id='second'))
+            self.assertIn('error', await second.receive_json())
+            with self.assertRaises(WSServerHandshakeError):
+                await admin.ws_connect('/input')
+            await first.close()
+            async with browser.ws_connect('/input') as replacement:
+                self.assertEqual((await replacement.receive_json())['display'], 'spice')
+            await second.send_json(dict(op='move', x=10, y=20, seq=3))
+            self.assertEqual(await second.receive_json(), {'motion':3})
+        batches = [c.args[1]['events'] for c in self.monitor.command.await_args_list
+                   if c.args[0] == 'input-send-event']
+        self.assertEqual(batches[:2], [[server.key_event('shift', True)], [server.key_event('shift', False)]])
+
+
+class ClipboardControl(unittest.IsolatedAsyncioTestCase):
+    async def test_clipboard_routes_read_write_and_clear_without_key_events(self):
+        app = web.Application()
+        monitor = AsyncMock()
+        app['shared'] = {'monitor': monitor, 'input_lock': asyncio.Lock()}
+        app.router.add_post('/control/{op}', server.administrative)
+        async with TestClient(TestServer(app)) as client:
+            with patch.object(server, 'text_bridge', new_callable=AsyncMock) as bridge:
+                bridge.side_effect = ['日本語', '', '']
+                result = await client.post('/control/clipboard-read')
+                self.assertEqual(await result.json(), {'text': '日本語'})
+                for text in ['日本語 🍵', '']:
+                    result = await client.post('/control/clipboard-write', json={'text': text})
+                    self.assertEqual(await result.json(), {'written': True})
+                invalid = await client.post('/control/clipboard-write', json={'text': 123})
+                self.assertEqual(invalid.status, 400)
+                self.assertEqual([call.args for call in bridge.await_args_list],
+                                 [('clipboard-read', ''), ('clipboard-write', '日本語 🍵'),
+                                  ('clipboard-write', '')])
+                monitor.command.assert_not_awaited()
 
 
 class MediaSelection(unittest.IsolatedAsyncioTestCase):

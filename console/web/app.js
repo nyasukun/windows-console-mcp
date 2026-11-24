@@ -52,6 +52,46 @@ const input = new WebSocket(socketURL('/input'));
 let screen, canvas, ready = false, fit = true, received = 0, ack = 0, animation = 0;
 let position = {x:16384,y:16384}, lastSent = '', noticeTimer, composing = false;
 const pending = new Map();
+function connectFrameDisplay(onerror) {
+  const ws = new WebSocket(socketURL('/display-frames'));
+  const image = document.createElement('canvas');
+  image.id = 'spice_surface_0';
+  const ctx = image.getContext('2d');
+  let queued, drawing = false, stopped = false;
+
+  ws.onmessage = async event => {
+    queued = event.data;
+    if (drawing) return;
+    drawing = true;
+    try {
+      while (queued && !stopped) {
+        const frame = queued;
+        queued = null;
+        const bitmap = await createImageBitmap(frame);
+        if (!stopped) {
+          if (image.width !== bitmap.width) image.width = bitmap.width;
+          if (image.height !== bitmap.height) image.height = bitmap.height;
+          ctx.drawImage(bitmap, 0, 0);
+          if (!image.isConnected) display.append(image);
+        }
+        bitmap.close();
+      }
+    } catch {
+      if (!stopped) onerror();
+    } finally {
+      drawing = false;
+    }
+  };
+  ws.onclose = () => { if (!stopped) onerror(); };
+  return {
+    stop() {
+      stopped = true;
+      queued = null;
+      ws.close();
+    }
+  };
+}
+
 function notify(text) {
   $('notice').textContent = text;
   clearTimeout(noticeTimer);
@@ -91,8 +131,9 @@ input.onmessage = event => {
   const msg = JSON.parse(event.data);
   if (msg.ready) {
     ready = true;
-    screen = new SpiceMainConn({uri:socketURL('/display'), screen_id:'display',
-      onerror:() => { release(); input.close(); failed('映像切断'); }});
+    const onerror = () => { release(); input.close(); failed('映像切断'); };
+    screen = msg.display === 'frames' ? connectFrameDisplay(onerror)
+      : new SpiceMainConn({uri:socketURL('/display'), screen_id:'display', onerror});
     status();
   }
   if (msg.motion !== undefined) ack = msg.motion;
@@ -104,7 +145,7 @@ input.onmessage = event => {
 input.onclose = () => {
   ready=false; screen?.stop();
   for (const p of pending.values()) p.reject(Error('切断されました'));
-  pending.clear(); failed('切断・ほかのタブが使用中');
+  pending.clear(); failed('接続が切れました');
 };
 $('reconnect').onclick = () => location.reload();
 function layout() {

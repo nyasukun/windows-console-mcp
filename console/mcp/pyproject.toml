@@ -7,4 +7,5 @@ dependencies = [
     "aiohttp>=3.12,<4",
     "pillow>=11,<14",
     "cryptography>=43",
+    "pycdlib>=1.14,<2",
 ]

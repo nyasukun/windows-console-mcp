@@ -13,12 +13,12 @@ ssh -N -o ExitOnForwardFailure=yes -L 6083:127.0.0.1:6083 vm-host
 
 ## 構成
 
-`server.py` はループバックで待ち受け、同一オリジンの WebSocket を受けます。画面は QEMU の SPICE Unix ソケットと Ubuntu が配布する spice-html5 のデコーダーを使用します。入力は制限されたイベントを既存 QMP に転送します。専用アプリの操作セッションは同時に1タブです。
+`server.py` はループバックで待ち受け、同一オリジンの WebSocket を受けます。最初のタブは QEMU の SPICE Unix ソケットと spice-html5 を使用します。追加タブは QEMU の読み取り専用 RFB 接続を通じて同じ画面を JPEG で受信します。どのタブでも QMP 経由で入力できます。あるタブでキーやボタンを押している間は、そのタブが入力を保持し、解放または切断で他のタブから操作できるようになります。
 
-`guest/bridge.ps1` は Windows の COM1 でテキスト操作を受けます。セットアップ CD の `install.cmd` がユーザープロファイルに配置し、サインイン時に起動します。配布 ISO の再作成例は次のとおりです。
+`guest/bridge.ps1` は Windows の COM1 でテキスト操作を受けます。Windows の新規インストール時に、補助 CD の応答ファイルが最初の管理者サインインで `install.cmd` を実行します。ヘルパーはユーザープロファイルに配置され、以降もサインイン時に起動します。ホストで補助 CD を再生成するコマンドは次のとおりです。
 
 ```sh
-genisoimage -J -r -V WINDOWS_CONSOLE -o state-clean/console-setup.iso console/guest/
+uv run --locked --project console/mcp python console/setup_media.py
 ```
 
 `run-vm-clean.sh` の COM1、既存の SPICE ソケット、`state-clean/qmp.sock` を使用します。Web サービスは `systemctl --user restart windows-html-console` で再起動できます。単独起動には `console/start.sh` を使います。
@@ -52,6 +52,12 @@ codex mcp add windows-console -- ssh -T -o BatchMode=yes vm-host .local/bin/wind
 | コンソール設定 | `console_settings` で待受ポート、サービス状態、URL、SSH 転送引数を取得。`configure_console` に 1024〜65535 の `port` を指定すると、Web サービスを再起動して疎通を確認します。ブラウザは返された URL に再接続します。 |
 
 管理用 Unix ソケットは `state-clean/console-admin.sock`（0600）です。MCP 入力とブラウザ入力は同じコンソールサーバーで順序を管理します。ブラウザでキーやマウスボタンを押している間に MCP が操作を要求した場合は、離してから再試行します。スクリーンショットの一時ファイルは応答生成時に削除します。
+
+### Windows のクリップボードを直接読み書きする
+
+`console_clipboard_read()` は、サインイン中の Windows ユーザーのクリップボードからプレーンテキストを取得し、`{"text":"…"}` を返します。`console_clipboard_write(text)` は、文字を入力欄へ貼り付けずにクリップボードを更新します。空文字列を渡すとクリップボードを消去します。どちらも日本語を含む UTF-8 換算で最大 64 KiB です。
+
+stdio と LAN の SSE の両方で使えます。既にインストール済みの Windows でヘルパーを更新するときは、最新版の補助 CD を接続した状態で Windows から `install.cmd` を実行します。
 
 ### LAN から SSE で接続する
 

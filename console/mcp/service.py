@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import transfers
 from live import install as install_live_stream
 from control_config import CONTROL, KEYS, ROOT, STATE, configured_port, store_port, validate_port
+from setup_media import build_setup_iso
 
 VM = os.environ.get('WINDOWS_CONSOLE_VM', 'windows11-vm-clean')
 UNIT = 'windows-html-console.service'
@@ -134,6 +135,8 @@ async def wait_for_vm(target, timeout):
 async def change_power(action, state, timeout_seconds):
     if state not in ('running', 'exited', 'created'):
         raise RuntimeError(f'Unsupported current container state: {state}')
+    if action == 'restart' or (action == 'start' and state != 'running'):
+        await asyncio.to_thread(build_setup_iso, STATE)
     if action != 'start' and state == 'running':
         await control('powerdown')
         await wait_for_vm('exited', timeout_seconds)
@@ -367,6 +370,24 @@ async def console_copy_selection() -> str:
     """Copy the selected text in the guest and return it via the console bridge."""
     async with console_input() as send:
         return await send('copy')
+
+
+@export_tool
+async def console_clipboard_read() -> dict:
+    """Read plain text from the signed-in Windows user's clipboard without sending Ctrl+C.
+    Returns an empty string if there is no text. Limit 64 KiB UTF-8.
+    """
+    return await control('clipboard-read')
+
+
+@export_tool
+async def console_clipboard_write(text: str) -> dict:
+    """Replace the signed-in Windows user's clipboard text without pasting it.
+    Pass an empty string to clear the clipboard. Limit 64 KiB UTF-8.
+    """
+    if len(text.encode()) > 65536:
+        raise ValueError('Text exceeds 64 KiB')
+    return await control('clipboard-write', text=text)
 
 
 @export_tool

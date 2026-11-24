@@ -35,6 +35,14 @@ if [[ -f internet-enabled ]]; then
   network_restrict=off
 fi
 
+setup_media=()
+if [[ -f setup/console-tools.iso ]]; then
+  setup_media=(
+    -drive if=none,id=consoletools,media=cdrom,format=raw,readonly=on,file=/vm-clean/setup/console-tools.iso
+    -device ide-cd,drive=consoletools,bus=ide.2
+  )
+fi
+
 exec qemu-system-x86_64 \
   -name 'Windows 11 clean setup' -machine q35,smm=on,accel=kvm -cpu host \
   -smp 4 -m 8G \
@@ -47,6 +55,7 @@ exec qemu-system-x86_64 \
   -device ide-hd,drive=osdisk,bus=ide.0,bootindex=1 \
   -drive if=none,id=install,media=cdrom,format=raw,readonly=on,file="$install_iso" \
   -device ide-cd,drive=install,bus=ide.1,bootindex=2 \
+  "${setup_media[@]}" \
   -chardev socket,id=consoletext,path=/vm-clean/console-text.sock,server=on,wait=off \
   -serial chardev:consoletext \
   -boot menu=on -device qemu-xhci \

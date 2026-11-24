@@ -21,6 +21,8 @@ fi
 mkdir -p -m 700 state-clean
 (
   flock -x 9
+  uv_exec=$(command -v uv || true)
+  "${uv_exec:-$HOME/.local/bin/uv}" run --locked --project console/mcp python console/setup_media.py
   if [[ ! -e state-clean/vnc-password ]]; then
     # QEMU's VNC protocol uses eight password bytes. Keep the file on the host.
     secret=$(mktemp state-clean/.vnc-password.XXXXXXXX)

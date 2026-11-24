@@ -11,6 +11,7 @@ from urllib.parse import urlsplit
 
 from aiohttp import WSMsgType, web
 
+from live_screen import frames, jpeg
 from qmp import Monitor
 from stream_input import batch_input
 from walkthrough import Walkthrough
@@ -25,7 +26,7 @@ async def local_only(request, handler):
     host = request.url.host
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise web.HTTPForbidden()
-    if request.path in ('/input', '/display'):
+    if request.path in ('/input', '/display', '/display-frames'):
         origin = urlsplit(request.headers.get('Origin', ''))
         if origin.scheme not in ('http', 'https') or origin.netloc != request.host:
             raise web.HTTPForbidden()
@@ -65,9 +66,9 @@ def button_event(button, down):
 async def input_session(request):
     admin = request.app.get('admin', False)
     shared = request.app['shared']
-    lock = shared['input_lock'] if admin else shared['browser']
-    if lock.locked():
-        raise web.HTTPConflict(text='別のタブが操作中です')
+    lock = shared['input_lock'] if admin else nullcontext()
+    if admin and lock.locked():
+        raise web.HTTPConflict(text='別の入力操作が進行中です')
     async with lock:
         if admin and shared['held']:
             raise web.HTTPConflict(text='ブラウザでキーまたはボタンが押されています')
@@ -75,10 +76,13 @@ async def input_session(request):
                                    max_msg_size=400000)
         monitor = shared['monitor']
         keys, buttons = set(), set()
+        primary = not admin and shared.get('spice_owner') is None
+        if primary:
+            shared['spice_owner'] = ws
         try:
             await monitor.command('query-status')
             await ws.prepare(request)
-            await ws.send_json({'ready':True})
+            await ws.send_json({'ready':True, 'display':'spice' if primary else 'frames'} if not admin else {'ready':True})
             async for packet in ws:
                 if packet.type != WSMsgType.TEXT:
                     break
@@ -87,6 +91,17 @@ async def input_session(request):
                 guard = nullcontext() if admin else shared['input_lock']
                 async with guard:
                     try:
+                        owner = shared['held']
+                        if not admin and owner and owner is not ws:
+                            if op in ('move', 'release') or (op in ('key', 'button') and msg.get('down') is not True):
+                                continue
+                            raise ValueError('別のタブでキーまたはマウスボタンが押されています')
+                        if not admin:
+                            # Ignore stale releases after a rejected press or focus change.
+                            if op == 'key' and msg.get('down') is not True and msg['key'] not in keys:
+                                continue
+                            if op == 'button' and msg.get('down') is not True and BUTTONS[msg['button']] not in buttons:
+                                continue
                         events = []
                         if op in ('move','button'):
                             for axis in ('x','y'):
@@ -116,7 +131,7 @@ async def input_session(request):
                         elif op != 'move':
                             raise ValueError('未知の入力')
                         if not admin:
-                            shared['held'] = bool(keys or buttons)
+                            shared['held'] = ws if keys or buttons else None
                         if events:
                             await monitor.command('input-send-event', {'events': events})
                             if op == 'move':
@@ -128,8 +143,10 @@ async def input_session(request):
         finally:
             guard = nullcontext() if admin else shared['input_lock']
             async with guard:
-                if not admin:
-                    shared['held'] = False
+                if shared['held'] is ws:
+                    shared['held'] = None
+                if primary:
+                    shared['spice_owner'] = None
                 release = [key_event(k,False) for k in keys]+[button_event(b,False) for b in buttons]
                 if release:
                     await monitor.command('input-send-event', {'events':release})
@@ -164,6 +181,39 @@ async def display(request):
     return ws
 
 
+async def display_frames(request):
+    """Serve a shared read-only RFB connection without claiming the SPICE session."""
+    ws = web.WebSocketResponse(heartbeat=15, max_msg_size=1024)
+    await ws.prepare(request)
+
+    async def deliver():
+        last = None
+        async for canvas in frames(20):
+            encoded, _ = await asyncio.to_thread(jpeg, canvas, 1920)
+            if encoded != last:
+                async with asyncio.timeout(10):
+                    await ws.send_bytes(encoded)
+                last = encoded
+
+    async def wait_for_close():
+        async for _ in ws:
+            pass
+
+    tasks = [asyncio.create_task(deliver()), asyncio.create_task(wait_for_close())]
+    try:
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            task.result()
+    except (EOFError, OSError, ValueError, TimeoutError):
+        await ws.close(code=1011, message=b'Display disconnected')
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await ws.close()
+    return ws
+
+
 async def administrative(request):
     monitor = request.app['shared']['monitor']
     op = request.match_info['op']
@@ -176,6 +226,15 @@ async def administrative(request):
         elif op == 'demo-clear':
             request.app['shared']['demo'].clear()
             result = {'cleared':True}
+        elif op in ('clipboard-read', 'clipboard-write'):
+            value = (await request.json())['text'] if op == 'clipboard-write' else ''
+            if not isinstance(value, str):
+                raise web.HTTPBadRequest(text='text must be a string')
+            if '\x00' in value:
+                raise web.HTTPBadRequest(text='Clipboard text must not contain NUL')
+            async with request.app['shared']['input_lock']:
+                answer = await text_bridge(op, value)
+            result = {'text': answer} if op == 'clipboard-read' else {'written': True}
         elif op == 'transfer-server':
             attach = (await request.json()).get('attach', True)
             result = await request.app['guest'].ensure(monitor if attach else None)
@@ -249,12 +308,13 @@ def main():
     app = web.Application(middlewares=[local_only])
     app['port'] = configured_port()
     demo = Walkthrough()
-    app['shared'] = {'demo':demo, 'monitor':Monitor(demo), 'browser':asyncio.Lock(),
-                     'input_lock':asyncio.Lock(), 'held':False}
+    app['shared'] = {'demo':demo, 'monitor':Monitor(demo), 'spice_owner':None,
+                     'input_lock':asyncio.Lock(), 'held':None}
     app.cleanup_ctx.append(admin_site)
     app.router.add_get('/walkthrough', demo.events)
     app.router.add_get('/input', input_session)
     app.router.add_get('/display', display)
+    app.router.add_get('/display-frames', display_frames)
     async def index(request):
         return web.FileResponse(ROOT/'web/index.html')
     app.router.add_get('/', index)
