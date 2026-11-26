@@ -47,7 +47,11 @@ uv run --locked --project console/mcp python console/setup_media.py
 
 ## MCP から操作する
 
-対象はこのホストの `windows11-vm-clean` です。MCP サーバーはクライアントが stdio で起動します。ホストで使う場合は、次のコマンドで Codex に登録し、新しいセッションを開きます。
+管理対象の VM とテンプレートは `vm_inventory` で確認できます。VM 管理の上部にある「AIエージェントで操作」から、MCP の接続方法と、最初の VM を作る指示をコピーできます。作成済み VM の行から開くと、指示に `vm_id` が入ります。
+
+VM ホスト上の OpenCode は、リポジトリ直下で起動すると同梱の [opencode.json](../opencode.json) から stdio サーバーを起動します。`opencode mcp list` で `windows-console` の接続を確認し、新しいセッションで `vm_inventory` を呼び出します。別端末の OpenCode では、設定の `command` に `["ssh", "-T", "-o", "BatchMode=yes", "vm-host", ".local/bin/windows-console-mcp"]` を指定します。ホストの起動リンクは [インストールガイド](../docs/install.md) の手順で用意します。
+
+ホストで Codex を使う場合は、次のコマンドで登録し、新しいセッションを開きます。
 
 ```sh
 codex mcp add windows-console -- "$HOME/.local/bin/windows-console-mcp"

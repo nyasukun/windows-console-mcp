@@ -14,7 +14,10 @@
     <fieldset id="management-controls">
       <section class="heading">
         <div><h1>VM 管理</h1><p>Windows VM の作成、電源操作、ネットワーク接続を管理します。</p></div>
-        <button id="refresh" type="button">更新</button>
+        <div class="heading-actions">
+          <button id="agent-start" type="button">AIエージェントで操作</button>
+          <button id="refresh" type="button">更新</button>
+        </div>
       </section>
       <p id="message" role="status" hidden></p>
       <p id="operation" role="status" hidden></p>
@@ -57,7 +60,44 @@
     </div>
     <p id="agent-target" class="meta"></p>
     <section>
+      <h3>AIエージェントへの指示</h3>
+      <pre id="prompt-setup"></pre>
+      <button id="copy-setup" type="button" data-copy="prompt-setup"></button>
+      <div id="agent-operate">
+        <pre id="prompt-operate"></pre>
+        <button type="button" data-copy="prompt-operate">画面確認の指示をコピー</button>
+      </div>
+    </section>
+    <section>
       <h3>MCPを接続する</h3>
+      <details>
+        <summary>OpenCode</summary>
+        <p>VMホストのリポジトリ直下で OpenCode を開きます。同梱の <code>opencode.json</code> が接続を登録します。<code>opencode mcp list</code> で <code>windows-console</code> が接続済みか確認してください。</p>
+        <p>設定を手動で追加する場合は、既存のプロジェクト設定に次の内容を統合します。</p>
+        <pre id="mcp-opencode">{
+  "mcp": {
+    "servers": {
+      "windows-console": {
+        "type": "local",
+        "command": ["bash", "-c", "repo=$(git rev-parse --show-toplevel) && exec \"$repo/console/mcp/start.sh\""]
+      }
+    }
+  }
+}</pre>
+        <button type="button" data-copy="mcp-opencode">OpenCodeの設定をコピー</button>
+        <p>別端末からは次の SSH 設定を使い、<code>vm-host</code> を SSH の接続先に置き換えます。VMホストに <code>~/.local/bin/windows-console-mcp</code> の起動リンクが必要です。</p>
+        <pre id="mcp-opencode-ssh">{
+  "mcp": {
+    "servers": {
+      "windows-console": {
+        "type": "local",
+        "command": ["ssh", "-T", "-o", "BatchMode=yes", "vm-host", ".local/bin/windows-console-mcp"]
+      }
+    }
+  }
+}</pre>
+        <button type="button" data-copy="mcp-opencode-ssh">OpenCodeのSSH設定をコピー</button>
+      </details>
       <p>Codex CLIをVMホストで使う場合は、リポジトリ直下で実行します。</p>
       <pre id="mcp-local">codex mcp add windows-console -- "$(pwd)/console/mcp/start.sh"</pre>
       <button type="button" data-copy="mcp-local">ローカル接続コマンドをコピー</button>
@@ -78,13 +118,6 @@
         <button type="button" data-copy="mcp-json">stdio設定の例をコピー</button>
       </details>
       <p>接続を追加したら、エージェントで <code>vm_inventory</code> を呼び出せることを確認します。</p>
-    </section>
-    <section>
-      <h3>AIエージェントへの指示例</h3>
-      <pre id="prompt-setup"></pre>
-      <button type="button" data-copy="prompt-setup">起動・セットアップ確認の指示をコピー</button>
-      <pre id="prompt-operate"></pre>
-      <button type="button" data-copy="prompt-operate">画面確認の指示をコピー</button>
     </section>
     <p id="copy-feedback" role="status"></p>
   </dialog>

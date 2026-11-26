@@ -195,6 +195,27 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
         await expect(row.get_by_text('外部接続なし')).to_be_visible()
         self.assertFalse((await self.call('vm_inventory'))['vms'][0]['internet_enabled'])
 
+    async def test_agent_guide_from_empty_inventory(self):
+        page = self.page
+        await page.context.grant_permissions(['clipboard-read', 'clipboard-write'], origin=self.base)
+        self.assertFalse((await self.call('vm_inventory'))['vms'])
+        await page.get_by_role('button', name='AIエージェントで操作', exact=True).click(timeout=3000)
+        guide = page.get_by_role('dialog', name='AIエージェントで操作')
+        await expect(guide.get_by_text('VM作成前', exact=False)).to_be_visible()
+        await guide.get_by_role('button', name='最初のVMを作成する指示をコピー').click()
+        prompt = await page.evaluate('navigator.clipboard.readText()')
+        for tool in ('vm_inventory', 'vm_template_save', 'vm_create', 'vm_start', 'console_screen'):
+            self.assertIn(tool, prompt)
+        await guide.get_by_text('OpenCode', exact=True).click()
+        await guide.get_by_role('button', name='OpenCodeの設定をコピー').click()
+        config = json.loads(await page.evaluate('navigator.clipboard.readText()'))
+        project_config = json.loads((CONSOLE.parent / 'opencode.json').read_text())
+        self.assertEqual(config['mcp'], project_config['mcp'])
+        await guide.get_by_role('button', name='OpenCodeのSSH設定をコピー').click()
+        config = json.loads(await page.evaluate('navigator.clipboard.readText()'))
+        self.assertEqual(config['mcp']['servers']['windows-console']['command'][-2:],
+                         ['vm-host', '.local/bin/windows-console-mcp'])
+
     async def test_agent_guide_during_creation_and_with_vm_id(self):
         await self.make_template()
         page = self.page
@@ -205,6 +226,8 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
         await editor.get_by_role('button', name='AIエージェントで操作').click()
         guide = page.get_by_role('dialog', name='AIエージェントで操作')
         await expect(guide.locator('#prompt-setup')).to_contain_text('Guided edition')
+        template, = (await self.call('vm_inventory'))['templates']
+        await expect(guide.locator('#prompt-setup')).to_contain_text(template['id'])
         await guide.get_by_role('button', name='ローカル接続コマンドをコピー').click()
         await expect(guide.get_by_role('status')).to_have_text('コピーしました。')
         self.assertIn('codex mcp add', await page.evaluate('navigator.clipboard.readText()'))

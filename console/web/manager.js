@@ -378,7 +378,9 @@ function openVM() {
     const templates = inventory.templates.map(item => [item.id, `${item.name}（${config(item)}）`]);
     const template = select('テンプレート', templates[0][0], templates);
     const network = networkFields(undefined, true);
-    const guide = action('AIエージェントで操作', () => openAgentGuide({name: name.value}));
+    const guide = action('AIエージェントで操作', () => openAgentGuide({
+      name: name.value, templateId: template.value, network: network()
+    }));
     guide.classList.add('agent-guide-entry');
     fields.append(guide);
     return () => ({name: name.value, template_id: template.value, ...network()});
@@ -412,6 +414,7 @@ $('new-vm').onclick = () => {
 };
 $('new-template').onclick = () => openTemplate();
 $('new-topology').onclick = () => openTopology();
+$('agent-start').onclick = () => openAgentGuide();
 $('refresh').onclick = refresh;
 $('cancel').onclick = () => editor.close();
 editor.addEventListener('cancel', event => { if (busy) event.preventDefault(); });

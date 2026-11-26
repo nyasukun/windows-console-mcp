@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "servers": {
+      "windows-console": {
+        "type": "local",
+        "command": ["bash", "-c", "repo=$(git rev-parse --show-toplevel) && exec \"$repo/console/mcp/start.sh\""]
+      }
+    }
+  }
+}
