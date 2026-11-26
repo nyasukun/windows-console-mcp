@@ -145,13 +145,38 @@ function request(op, text) {
     pending.set(id,{resolve,reject});
   });
 }
+
+function connectDisplay(mode) {
+  const disconnected = () => { release(); input.close(); failed('映像切断'); };
+  if (mode === 'frames') {
+    screen = connectFrameDisplay(disconnected);
+    return;
+  }
+  let switching = false;
+  const useFrames = () => {
+    if (switching) return;
+    switching = true;
+    queueMicrotask(() => {
+      if (!ready) return;
+      screen?.stop();
+      display.replaceChildren();
+      canvas = null;
+      status();
+      screen = connectFrameDisplay(disconnected);
+    });
+  };
+  try {
+    screen = new SpiceMainConn({uri: socketURL('display'), screen_id: 'display', onerror: useFrames});
+  } catch {
+    useFrames();
+  }
+}
+
 input.onmessage = event => {
   const msg = JSON.parse(event.data);
   if (msg.ready) {
     ready = true;
-    const onerror = () => { release(); input.close(); failed('映像切断'); };
-    screen = msg.display === 'frames' ? connectFrameDisplay(onerror)
-      : new SpiceMainConn({uri:socketURL('display'), screen_id:'display', onerror});
+    connectDisplay(msg.display);
     status();
   }
   if (msg.motion !== undefined) ack = msg.motion;

@@ -26,6 +26,7 @@ from transfer_http import install_relay
 PROJECT = ROOT.parent
 PRIVATE_NETWORKS = [ipaddress.IPv4Network(cidr) for cidr in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')]
 VM_ID = r'[0-9a-f]{12}'
+STOPPED = (None, 'created', 'exited', 'dead')
 
 
 class Conflict(RuntimeError):
@@ -166,6 +167,7 @@ class VMManager:
                 raise Conflict('Use vm_topology_save for a network topology or the imported VM NAT controls')
             vm['internet_enabled'] = enabled
             self.save(inv)
+        return {'vm_id': vm_id, 'internet_enabled': enabled}
 
     def vm_dir(self, vm_id):
         if not isinstance(vm_id, str) or not re.fullmatch(VM_ID, vm_id):
@@ -261,7 +263,9 @@ class VMManager:
                 raise ValueError('トポロジ内のセグメントを指定してください')
         return dict(topology_id=topology_id, segment=segment)
 
-    def create_vm(self, name, template_id, topology_id=None, segment=None):
+    def create_vm(self, name, template_id, topology_id=None, segment=None, internet_enabled=False):
+        if type(internet_enabled) is not bool or (internet_enabled and topology_id is not None):
+            raise ValueError('個別NATはトポロジーに接続しないVMで設定してください')
         with self.edit() as inv:
             template = inv['templates'][template_id]
             self.iso(template['image_id'])
@@ -270,6 +274,8 @@ class VMManager:
             vm = inv['vms'][ident] = dict(id=ident, name=named(name), template_id=template_id,
                                          template_name=template['name'], **size,
                                          **self.attachment(inv, topology_id, segment))
+            if internet_enabled:
+                vm['internet_enabled'] = True
             self.save(inv)
             return dict(vm, status='stopped')
 
@@ -324,7 +330,7 @@ class VMManager:
                 self.docker('container', 'rm', '-f', name)
 
     def require_stopped(self, name, statuses):
-        if statuses.get(name) not in (None, 'created', 'exited', 'dead'):
+        if statuses.get(name) not in STOPPED:
             raise Conflict('先にVMを停止してください')
 
     def wait_container(self, name, ready, seconds):
@@ -342,9 +348,21 @@ class VMManager:
         ident = topology['id']
         router = self.name('router', ident)
         proxy = self.name('proxy', ident)
-        if statuses.get(router) != 'running':
-            for member in members:
-                self.require_stopped(self.vm_container(member), statuses)
+        containers = [self.vm_container(vm) for vm in members]
+        inactive = all(statuses.get(name) in STOPPED for name in containers)
+        replace = statuses.get(router) != 'running'
+        if not replace and inactive:
+            desired = self.docker('image', 'inspect', '--format', '{{.Id}}', self.image)
+            replace = any(
+                self.docker('container', 'inspect', '--format', '{{.Image}}', name) != desired
+                for name in (router, proxy) if statuses.get(name) == 'running'
+            )
+        if replace:
+            for name in containers:
+                self.require_stopped(name, statuses)
+            for name in containers:
+                if name in statuses:
+                    self.docker('container', 'rm', name)
             self.remove_topology(ident, statuses)
             self.docker('run', '-d', '--name', router, '--label', self.label,
                         '--network', 'bridge' if topology['proxy'] else 'none',
@@ -433,6 +451,7 @@ class VMManager:
             self.require_stopped(name, statuses)
             if name in statuses:
                 self.docker('container', 'rm', name)
+                statuses.pop(name)
             if len(os.fsencode(state / 'spice/console.sock')) > 107:
                 raise ValueError('VMの状態ディレクトリのパスがUnixソケットには長すぎます')
             iso = self.iso(vm['image_id'])
@@ -491,11 +510,6 @@ class VMManager:
                 status = self.statuses().get(name)
                 if status == 'running' and not force:
                     self.monitor_command(vm_id, 'system_powerdown')
-                    deadline = time.monotonic() + timeout_seconds
-                    while self.statuses().get(name) == 'running':
-                        if time.monotonic() >= deadline:
-                            raise Conflict('Windowsの終了を確認できません。必要なら強制停止または強制停止して削除できます')
-                        time.sleep(.5)
                 elif force and status in ('running', 'restarting', 'paused'):
                     if status == 'paused':
                         self.docker('unpause', name)
@@ -505,11 +519,20 @@ class VMManager:
                         self.require_stopped(name, self.statuses())
                 else:
                     self.require_stopped(name, {name: status})
-                statuses = self.statuses()
-                self.require_stopped(name, statuses)
+                statuses = self.wait_stopped(name, timeout_seconds)
                 if not vm.get('legacy_container') and name in statuses:
                     self.docker('container', 'rm', name)
             return dict(vm, status='stopped')
+
+    def wait_stopped(self, name, timeout_seconds):
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            statuses = self.statuses()
+            if statuses.get(name) in STOPPED:
+                return statuses
+            if time.monotonic() >= deadline:
+                raise Conflict('Windowsの終了を確認できません。必要なら強制停止して削除できます')
+            time.sleep(.25)
 
     def delete_vm(self, vm_id, force=False):
         if type(force) is not bool:

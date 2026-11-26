@@ -655,9 +655,9 @@ async def vm_template_delete(template_id: str) -> dict:
 
 @export_tool
 async def vm_create(name: str, template_id: str, topology_id: str | None = None,
-                    segment: str | None = None) -> dict:
+                    segment: str | None = None, internet_enabled: bool = False) -> dict:
     """Create a stopped VM from a template. An optional topology and its segment CIDR attach a NIC."""
-    return await asyncio.to_thread(manager.create_vm, name, template_id, topology_id, segment)
+    return await asyncio.to_thread(manager.create_vm, name, template_id, topology_id, segment, internet_enabled)
 
 
 @export_tool

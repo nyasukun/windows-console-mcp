@@ -55,7 +55,7 @@ function setBusy(value) {
   $('management-controls').disabled = value;
 }
 
-async function operate(path, method, data, {confirmation, progress, vmId, onError} = {}) {
+async function operate(path, method, data, {confirmation, progress, vmId, onError, onSuccess} = {}) {
   if (busy || (confirmation && !window.confirm(confirmation))) return;
   setBusy(true);
   clearRecovery();
@@ -69,7 +69,8 @@ async function operate(path, method, data, {confirmation, progress, vmId, onErro
   }
   try {
     await api(path, method, data);
-    await refresh({paint: false});
+    if (onSuccess) onSuccess();
+    else await refresh({paint: false});
   } catch (error) {
     await refresh({paint: false});
     message($('message'), error.message);
@@ -155,7 +156,8 @@ function renderVMs(topologies) {
     const topology = topologies.get(vm.topology_id);
     const network = row.insertCell();
     network.className = 'vm-network';
-    const connection = vm.legacy_container ? 'NAT（' + (vm.legacy_internet ? '有効' : '無効') + '）' : topology || '接続なし';
+    const connection = vm.legacy_container ? 'NAT（' + (vm.legacy_internet ? '有効' : '無効') + '）' :
+      topology || (vm.internet_enabled ? '個別NAT（有効に設定）' : '外部接続なし');
     network.append(element('span', connection), element('div', vm.segment || '', 'meta'));
     const state = stateBadge(vm);
     state.id = 'vm-state-' + vm.id;
@@ -190,7 +192,14 @@ function renderVMs(topologies) {
       actions.append(action('起動', () => operate(path + '/start', 'POST', {}, {
         progress: vm.name + ' を起動しています…', vmId: vm.id
       })));
-      if (!vm.legacy_container) actions.append(action('接続先を変更', () => openNetwork(vm)));
+      actions.append(action('起動してコンソールを開く', () => operate(path + '/start', 'POST', {}, {
+        progress: vm.name + ' を起動しています…', vmId: vm.id,
+        onSuccess: () => location.assign(`/vms/${vm.id}/console/`)
+      })));
+      if (!vm.legacy_container) {
+        actions.append(action('接続先を変更', () => openNetwork(vm)));
+        if (!vm.topology_id) actions.append(action('インターネット設定', () => openInternet(vm)));
+      }
     }
     if (vm.status === 'deleting') {
       actions.append(action('削除を再試行', () => forceDelete(vm), {danger: true}));
@@ -337,20 +346,25 @@ function openTopology(item) {
     }), item ? `topologies/${item.id}` : 'topologies', item ? 'PUT' : 'POST');
 }
 
-function networkFields(vm) {
+function networkFields(vm, allowDirect = false) {
   const options = [['', '接続なし'], ...inventory.topologies.map(topology => [topology.id, topology.name])];
   const topology = select('トポロジ', vm?.topology_id || '', options);
   const segment = select('セグメント', '', []);
+  const nat = allowDirect ? natField(false) : null;
   function populate(value) {
     segment.replaceChildren();
     const target = inventory.topologies.find(item => item.id === topology.value);
     segment.closest('.field').hidden = !target;
+    if (nat) nat.closest('.nat-setting').hidden = !!target;
     for (const cidr of target?.segments || []) segment.add(new Option(cidr, cidr));
     if (value) segment.value = value;
   }
   topology.onchange = () => populate();
   populate(vm?.segment);
-  return () => ({topology_id: topology.value || null, segment: segment.value || null});
+  return () => ({
+    topology_id: topology.value || null, segment: segment.value || null,
+    ...(nat && {internet_enabled: !topology.value && nat.checked})
+  });
 }
 
 function openVM() {
@@ -358,12 +372,29 @@ function openVM() {
     const name = input('VM 名', '', {maxLength: 80});
     const templates = inventory.templates.map(item => [item.id, `${item.name}（${config(item)}）`]);
     const template = select('テンプレート', templates[0][0], templates);
-    const network = networkFields();
+    const network = networkFields(undefined, true);
     const guide = action('AIエージェントで操作', () => openAgentGuide({name: name.value}));
     guide.classList.add('agent-guide-entry');
     fields.append(guide);
     return () => ({name: name.value, template_id: template.value, ...network()});
   }, 'vms', 'POST');
+}
+
+function natField(enabled) {
+  const checkbox = field('インターネット接続を有効にする（個別NAT）',
+    Object.assign(element('input'), {type: 'checkbox', checked: enabled}));
+  const description = element('p', 'Windows の初回設定でオンライン接続が必要な場合に有効にします。', 'meta');
+  const group = element('div', undefined, 'field nat-setting');
+  checkbox.closest('.field').before(group);
+  group.append(checkbox.closest('.field'), description);
+  return checkbox;
+}
+
+function openInternet(vm) {
+  dialog(`${vm.name} のインターネット設定`, '保存', () => {
+    const nat = natField(!!vm.internet_enabled);
+    return () => ({enabled: nat.checked});
+  }, `vms/${vm.id}/internet`, 'PUT');
 }
 
 function openNetwork(vm) {

@@ -89,6 +89,19 @@ class ManagedVMTest(unittest.IsolatedAsyncioTestCase):
         monitor.assert_called_once_with(vm['id'], 'system_powerdown')
         docker.assert_called_once_with('container', 'rm', name)
 
+    async def test_force_stop_waits_for_docker_to_report_exit(self):
+        template = await service.vm_template_save(**self.template)
+        vm = await service.vm_create('Slow shutdown', template['id'])
+        name = self.manager.name('vm', vm['id'])
+        self.statuses.side_effect = [{name: 'running'}, {name: 'running'}, {name: 'exited'}]
+        with (patch.object(self.manager, 'docker') as docker,
+              patch('vm_manager.time.sleep') as wait):
+            result = await service.vm_stop(vm['id'], force=True)
+        self.assertEqual(result['status'], 'stopped')
+        wait.assert_called_once()
+        self.assertEqual([call.args for call in docker.call_args_list],
+                         [('kill', name), ('container', 'rm', name)])
+
     async def test_force_delete_retries_container_removal_without_losing_disk(self):
         template = await service.vm_template_save(**self.template)
         vm = await service.vm_create('Unresponsive VM', template['id'])
@@ -113,6 +126,25 @@ class ManagedVMTest(unittest.IsolatedAsyncioTestCase):
             docker.assert_called_once_with('container', 'rm', '--force', name)
         self.assertFalse(disk.exists())
         self.assertFalse((await service.vm_inventory())['vms'])
+
+    async def test_router_upgrade_waits_until_all_members_are_stopped(self):
+        topology = await service.vm_topology_save('Network', ['10.45.0.0/24'], proxy=True)
+        template = await service.vm_template_save(**self.template)
+        vm = await service.vm_create('Guest', template['id'], topology['id'], '10.45.0.0/24')
+        router = self.manager.name('router', topology['id'])
+        proxy = self.manager.name('proxy', topology['id'])
+        name = self.manager.name('vm', vm['id'])
+        statuses = {router: 'running', proxy: 'running'}
+        with (patch.object(self.manager, 'docker', side_effect=['new-image', 'old-image', '', '', '', '', '']) as docker,
+              patch.object(self.manager, 'wait_container')):
+            self.statuses.return_value = {router: 'running'}
+            self.assertEqual(self.manager.ensure_router(topology, statuses, [vm]), router)
+        docker.assert_any_call('container', 'rm', '-f', proxy)
+        docker.assert_any_call('container', 'rm', '-f', router)
+        with (patch.object(self.manager, 'docker') as docker,
+              patch.object(self.manager, 'wait_container')):
+            self.manager.ensure_router(topology, dict(statuses, **{name: 'running'}), [vm])
+        docker.assert_not_called()
 
     async def test_console_session_tracks_rebound_monitor_socket(self):
         template = await service.vm_template_save(**self.template)

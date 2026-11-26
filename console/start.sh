@@ -6,37 +6,31 @@ umask 077
 mkdir -p "$app_data" ../state-clean
 
 if [[ -z ${CONSOLE_SPICE_SRC:-} ]]; then
-  if [[ -r /usr/share/spice-html5/src/main.js ]]; then
-    CONSOLE_SPICE_SRC=/usr/share/spice-html5/src
-  else
-    CONSOLE_SPICE_SRC="$app_data/spice-src"
+  image=${WINDOWS_MANAGER_IMAGE:-windows-console-mcp:local}
+  if ! image_id=$(docker image inspect --format '{{.Id}}' "$image"); then
+    echo "Build the Windows console image first: docker build -t $image ." >&2
+    exit 1
+  fi
+  CONSOLE_SPICE_SRC="$app_data/spice-${image_id#sha256:}"
+  (
+    flock -x 9
     if [[ ! -r "$CONSOLE_SPICE_SRC/main.js" ]]; then
       stage=$(mktemp -d "$app_data/.spice.XXXXXXXX")
-      trap 'rm -rf -- "$stage"' EXIT
-      for container in "${WINDOWS_CONSOLE_VM:-windows11-vm-clean}" windows11-spice-web; do
-        if docker cp "$container:/usr/share/spice-html5/src" "$stage/src" && [[ -r "$stage/src/main.js" ]]; then
-          mkdir -p "$CONSOLE_SPICE_SRC"
-          cp -R "$stage/src/." "$CONSOLE_SPICE_SRC/"
-          break
-        fi
-      done
-      if [[ ! -r "$CONSOLE_SPICE_SRC/main.js" ]]; then
-        rm -rf -- "$stage/src"
-        if assets=$(docker create "${WINDOWS_MANAGER_IMAGE:-windows-console-mcp:local}" /bin/true); then
-          if docker cp "$assets:/usr/share/spice-html5/src" "$stage/src" &&
-             [[ -r "$stage/src/main.js" ]]; then
-            mkdir -p "$CONSOLE_SPICE_SRC"
-            cp -R "$stage/src/." "$CONSOLE_SPICE_SRC/"
-          fi
-          docker rm "$assets" >/dev/null
-        fi
-      fi
-      rm -rf -- "$stage"
+      container=
+      cleanup() {
+        if [[ -n $container ]]; then docker rm "$container" >/dev/null || true; fi
+        rm -rf -- "$stage"
+      }
+      trap cleanup EXIT
+      container=$(docker create "$image_id" /bin/true)
+      docker cp "$container:/usr/share/spice-html5/src" "$stage/src"
+      test -r "$stage/src/main.js"
+      mv --no-target-directory "$stage/src" "$CONSOLE_SPICE_SRC"
     fi
-  fi
+  ) 9>"$app_data/spice.lock"
 fi
 if [[ ! -r "$CONSOLE_SPICE_SRC/main.js" ]]; then
-  echo 'Set CONSOLE_SPICE_SRC to the spice-html5 src directory or build the Windows console Docker image first.' >&2
+  echo 'CONSOLE_SPICE_SRC must point to the spice-html5 src directory.' >&2
   exit 1
 fi
 export CONSOLE_SPICE_SRC

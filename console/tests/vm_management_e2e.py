@@ -182,9 +182,18 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
         await page.get_by_role('button', name='保存', exact=True).click()
         await expect(page.get_by_role('dialog')).to_have_accessible_name('VM を作成')
         await page.get_by_label('VM 名').fill('First VM')
+        await page.get_by_label('インターネット接続を有効にする（個別NAT）').check()
         await page.get_by_role('button', name='作成', exact=True).click()
-        await expect(page.get_by_role('row', name='First VM', exact=False)).to_be_visible()
-        self.assertEqual((await self.call('vm_inventory'))['vms'][0]['name'], 'First VM')
+        row = page.get_by_role('row', name='First VM', exact=False)
+        await expect(row.get_by_text('個別NAT（有効に設定）')).to_be_visible()
+        vm, = (await self.call('vm_inventory'))['vms']
+        self.assertEqual(vm['name'], 'First VM')
+        self.assertTrue(vm['internet_enabled'])
+        await row.get_by_role('button', name='インターネット設定').click()
+        await page.get_by_label('インターネット接続を有効にする（個別NAT）').uncheck()
+        await page.get_by_role('button', name='保存', exact=True).click()
+        await expect(row.get_by_text('外部接続なし')).to_be_visible()
+        self.assertFalse((await self.call('vm_inventory'))['vms'][0]['internet_enabled'])
 
     async def test_agent_guide_during_creation_and_with_vm_id(self):
         await self.make_template()
@@ -321,9 +330,21 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
                                              'ip', '-j', 'link', 'show', 'dev', 'vm' + vm_id)
         self.assertEqual(json.loads(link_state)[0]['master'], 'lan1')
         url = self.base + await link.get_attribute('href')
+        fallback = await self.browser.new_page()
+        await fallback.route_web_socket('**/display', lambda socket: socket.close())
+        async with fallback.expect_websocket(predicate=lambda socket: socket.url.endswith('/display-frames')):
+            await fallback.goto(url)
+        await expect(fallback.locator('#display canvas')).to_be_visible(timeout=15000)
+        await fallback.close()
         first = await self.browser.new_page()
+        messages = []
+        first.on('console', lambda event: messages.append(event.text) if event.type == 'error' else None)
+        first.on('pageerror', lambda event: messages.append(str(event)))
         await first.goto(url)
-        await expect(first.locator('#display canvas')).to_be_visible(timeout=15000)
+        try:
+            await expect(first.locator('#display canvas')).to_be_visible(timeout=15000)
+        except AssertionError as exc:
+            raise AssertionError(f'{exc}\nBrowser errors: {messages}') from exc
         reads = await first.evaluate("""async () => {
             const stage = document.querySelector('#stage');
             const getWidth = Object.getOwnPropertyDescriptor(Element.prototype, 'clientWidth').get;
@@ -390,7 +411,11 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
         vm = await self.call('vm_create', name='Standalone Windows', template_id=template['id'])
         self.assertFalse((await self.call('vm_internet_status'))['next_boot_enabled'])
         self.assertTrue((await self.call('vm_set_internet', enabled=True))['next_boot_enabled'])
-        self.assertEqual((await self.call('vm_power', action='start'))['container'], 'running')
+        page = self.page
+        await page.locator('#refresh').click()
+        await page.get_by_role('button', name='起動してコンソールを開く').click()
+        await expect(page).to_have_url(self.base + f'/vms/{vm["id"]}/console/', timeout=30000)
+        await expect(page.locator('#display canvas')).to_be_visible(timeout=15000)
         status = await self.call('vm_internet_status', vm_id=vm['id'])
         self.assertTrue(status['current_enabled'])
         self.assertFalse(status['restart_required'])

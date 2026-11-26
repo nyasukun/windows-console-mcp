@@ -45,6 +45,7 @@ def install(app, manager):
         ('DELETE', '/api/topologies/{topology_id}'): manager.delete_topology,
         ('POST', '/api/vms'): manager.create_vm,
         ('PUT', '/api/vms/{vm_id}/network'): manager.set_vm_network,
+        ('PUT', '/api/vms/{vm_id}/internet'): manager.set_internet,
         ('POST', '/api/vms/{vm_id}/start'): manager.start_vm,
         ('POST', '/api/vms/{vm_id}/stop'): manager.stop_vm,
         ('DELETE', '/api/vms/{vm_id}'): manager.delete_vm,
