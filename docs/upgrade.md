@@ -43,6 +43,8 @@ printf 'バックアップ先 %s\n' "$backup"
 
 `state-managed` は VM 一覧と VM ごとのディスク・TPM・転送データ、`state-console` は Web のポート設定、`state-clean` は移行した旧 VM の状態です。ISO と systemd の個別設定、LAN SSE の証明書・認証ファイルを別の場所に置いている場合は、その保存場所も控えます。バックアップにはゲストデータや認証情報が含まれることがあるため、ユーザーが管理する保存先を使います。
 
+`tar` が `socket ignored` と表示することがあります。該当するソケットは次回の起動時に作り直されます。ディスク容量によってバックアップに時間がかかるため、`tar` の完了を確認してから更新へ進みます。
+
 ## 3. コードとイメージを更新する
 
 ```sh
@@ -100,4 +102,4 @@ systemctl --user start windows-html-console.service
 systemctl --user start windows-console-mcp-sse.service
 ```
 
-カスタムの保存先を使う環境では、退避と復元のパスをその保存先に合わせます。Unix ソケットはサービスや VM が起動時に作り直します。
+カスタムの保存先を使う環境では、退避と復元のパスをその保存先に合わせます。
