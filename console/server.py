@@ -58,8 +58,8 @@ async def text_bridge(op, text='', state=None, check_socket=None):
         raise ConnectionError('Windows の補助ツールとの接続が切れました')
     except TimeoutError as exc:
         raise TimeoutError(
-            'Windows の補助ツールから応答がありません。Windows にサインイン後、'
-            'エクスプローラーの「PC」から「CONSOLE_TOOLS」を開き、'
+            'Windows の補助ツールから応答がありません。サインイン直後は少し待ってください。'
+            '応答しない場合は、エクスプローラーの「PC」から「CONSOLE_TOOLS」を開き、'
             'install.cmd を実行してから再試行してください。'
         ) from exc
     finally:
