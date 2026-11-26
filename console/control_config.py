@@ -1,13 +1,28 @@
+import fcntl
 import json
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 STATE = ROOT.parent / 'state-clean'
-CONTROL = STATE / 'console-admin.sock'
-CONFIG = STATE / 'console-server.json'
+SERVICE_STATE = Path(os.environ.get('WINDOWS_CONSOLE_SERVICE_STATE', ROOT.parent / 'state-console'))
+CONTROL = SERVICE_STATE / 'console-admin.sock'
+CONFIG = SERVICE_STATE / 'console-server.json'
+LEGACY_CONTROL = STATE / 'console-admin.sock'
+LEGACY_CONFIG = STATE / 'console-server.json'
 DEFAULT_PORT = 6083
+
+
+@contextmanager
+def legacy_lock(state):
+    with (state / 'console-management.lock').open('a') as file:
+        try:
+            fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError('Another management operation is in progress') from exc
+        yield
 
 
 def validate_port(value):
@@ -17,14 +32,17 @@ def validate_port(value):
 
 
 def configured_port():
-    try:
-        return validate_port(json.loads(CONFIG.read_text())['port'])
-    except FileNotFoundError:
-        return DEFAULT_PORT
+    for path in (CONFIG, LEGACY_CONFIG):
+        try:
+            return validate_port(json.loads(path.read_text())['port'])
+        except FileNotFoundError:
+            continue
+    return DEFAULT_PORT
 
 
 def store_port(port):
-    with tempfile.NamedTemporaryFile('w', dir=STATE, delete=False) as out:
+    CONFIG.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile('w', dir=CONFIG.parent, delete=False) as out:
         try:
             json.dump({'port': validate_port(port)}, out)
             out.flush()

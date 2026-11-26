@@ -19,8 +19,12 @@ def surface(width, height):
 
 
 @asynccontextmanager
-async def display_connection():
-    reader, writer = await asyncio.open_connection('127.0.0.1', int(os.environ.get('WINDOWS_CONSOLE_RFB_PORT', '5912')))
+async def display_connection(state=None):
+    if state is None:
+        reader, writer = await asyncio.open_connection(
+            '127.0.0.1', int(os.environ.get('WINDOWS_CONSOLE_RFB_PORT', '5912')))
+    else:
+        reader, writer = await asyncio.open_unix_connection(state / 'vnc.sock')
     read = reader.readexactly
     try:
         async with asyncio.timeout(7):
@@ -32,7 +36,7 @@ async def display_connection():
                 raise ValueError('QEMU VNC authentication unavailable')
             writer.write(b'\x02')
             challenge = await read(16)
-            password = (STATE / 'vnc-password').read_bytes()[:8].ljust(8, b'\0')
+            password = ((state or STATE) / 'vnc-password').read_bytes()[:8].ljust(8, b'\0')
             key = bytes(int(f'{n:08b}'[::-1], 2) for n in password)
             enc = Cipher(TripleDES(key * 3), modes.ECB()).encryptor()
             writer.write(enc.update(challenge) + enc.finalize())
@@ -55,8 +59,8 @@ async def display_connection():
         await writer.wait_closed()
 
 
-async def frames(fps):
-    async with display_connection() as (reader, writer, canvas):
+async def frames(fps, state=None):
+    async with display_connection(state) as (reader, writer, canvas):
         read = reader.readexactly
         incremental = False
         while True:

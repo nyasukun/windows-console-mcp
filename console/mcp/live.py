@@ -63,13 +63,15 @@ View = Literal['bare', 'demo']
 
 
 class LiveStream:
-    def __init__(self, connect, views):
+    def __init__(self, connect, views, path="", state=None):
         self.id = uuid.uuid4().hex
         uri = f'windows-console://live/{self.id}/frame'
         names = ('bare', 'demo') if views == 'both' else (views,)
         self.views = {name: FrameView(uri if name == 'bare' else uri + '/demo') for name in names}
         self.primary = names[0]
         self.connect = connect
+        self.path = path
+        self.state = state
         self.changed = asyncio.Condition()
         self.repaint = asyncio.Event()
         self.canvas = self.step = None
@@ -107,7 +109,8 @@ class LiveStream:
         await view.notify()
 
     async def capture(self, fps, width):
-        async for canvas in frames(fps):
+        updates = frames(fps, self.state) if self.state is not None else frames(fps)
+        async for canvas in updates:
             if 'demo' in self.views:
                 # RFB updates its image in place after this iteration returns.
                 self.canvas = canvas.copy()
@@ -118,7 +121,7 @@ class LiveStream:
 
     async def watch_demo(self):
         async with self.connect() as client:
-            async with client.get('http://localhost/walkthrough',
+            async with client.get('http://localhost' + self.path + '/walkthrough',
                                   timeout=aiohttp.ClientTimeout(sock_connect=5, sock_read=25)) as response:
                 response.raise_for_status()
                 buffer = bytearray()
@@ -208,7 +211,7 @@ class LiveStream:
             if self.ws is not None and self.ws.closed:
                 raise RuntimeError('Input stream disconnected; close and reopen it')
             if self.ws is None:
-                self.ws = await self.client.ws_connect('http://localhost/stream-input', heartbeat=15)
+                self.ws = await self.client.ws_connect('http://localhost' + self.path + '/stream-input', heartbeat=15)
             try:
                 await self.ws.send_json({'events':events})
                 ack = await self.ws.receive_json(timeout=20)
@@ -234,7 +237,7 @@ class LiveStream:
             await self.client.close()
 
 
-def install(mcp, connection):
+def install(mcp, connection, target=None):
     active = None
     lifecycle = asyncio.Lock()
 
@@ -246,7 +249,7 @@ def install(mcp, connection):
     @mcp.tool()
     async def console_stream_open(max_fps: Annotated[int, Field(ge=1,le=30)]=12,
                                   max_width: Annotated[int, Field(ge=160,le=4096)]=1280,
-                                  views: Literal['bare', 'demo', 'both']='bare') -> dict:
+                                  views: Literal['bare', 'demo', 'both']='bare', vm_id: str | None = None) -> dict:
         """Start incremental JPEG capture: bare, demo with annotations, or both.
         Each enabled view has its own frame_uri and frame_sequence in the views map.
         Subscribe to its URI or pass view to console_stream_next. Both share one input stream.
@@ -255,7 +258,8 @@ def install(mcp, connection):
         async with lifecycle:
             if active:
                 raise ValueError('Close the current stream first')
-            item = LiveStream(connection, views)
+            path, state = target(vm_id) if target else ('', None)
+            item = LiveStream(connection, views, path, state)
             try:
                 await item.start(max_fps, max_width)
             except BaseException:

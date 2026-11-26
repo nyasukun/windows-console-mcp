@@ -28,7 +28,10 @@ async def exercise(client, browser, move_guest):
         canvas.height = 768;
         document.getElementById('display').append(canvas);
     })""")
-    await page.goto(f'http://127.0.0.1:{configured_port()}/')
+    base = f'http://127.0.0.1:{configured_port()}'
+    inventory = await (await page.request.get(base + '/api/management')).json()
+    imported = next(vm for vm in inventory['vms'] if vm.get('legacy_container'))
+    await page.goto(f'{base}/vms/{imported["id"]}/console/')
     await expect(page.locator('#status')).to_have_text('接続済み')
     await page.locator('#surface').focus()
     layer = page.locator('#walkthrough')

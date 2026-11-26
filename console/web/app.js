@@ -47,46 +47,64 @@ document.addEventListener('keydown', e => {
     else { sessionMenu.showPopover(); $('fit').focus(); }
   }
 },true);
-const socketURL = path => (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + path;
-const input = new WebSocket(socketURL('/input'));
+const socketURL = path => {
+  const url = new URL(path, location.href);
+  url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.href;
+};
+if (location.pathname.startsWith('/vms/')) {
+  document.querySelector('.identity strong').textContent = 'Windows VM';
+}
+const input = new WebSocket(socketURL('input'));
 let screen, canvas, ready = false, fit = true, received = 0, ack = 0, animation = 0;
 let position = {x:16384,y:16384}, lastSent = '', noticeTimer, composing = false;
 const pending = new Map();
 function connectFrameDisplay(onerror) {
-  const ws = new WebSocket(socketURL('/display-frames'));
+  const ws = new WebSocket(socketURL('display-frames'));
   const image = document.createElement('canvas');
   image.id = 'spice_surface_0';
   const ctx = image.getContext('2d');
-  let queued, drawing = false, stopped = false;
+  let queued, drawing = false, stopped = false, paint = 0;
 
-  ws.onmessage = async event => {
-    queued = event.data;
-    if (drawing) return;
+  function schedulePaint() {
+    if (!paint && !drawing && !stopped) paint = requestAnimationFrame(draw);
+  }
+
+  async function draw() {
+    paint = 0;
+    if (!queued || stopped) return;
+    const frame = queued;
+    queued = null;
     drawing = true;
     try {
-      while (queued && !stopped) {
-        const frame = queued;
-        queued = null;
-        const bitmap = await createImageBitmap(frame);
-        if (!stopped) {
-          if (image.width !== bitmap.width) image.width = bitmap.width;
-          if (image.height !== bitmap.height) image.height = bitmap.height;
-          ctx.drawImage(bitmap, 0, 0);
-          if (!image.isConnected) display.append(image);
-        }
+      const bitmap = await createImageBitmap(frame);
+      try {
+        if (stopped) return;
+        if (image.width !== bitmap.width) image.width = bitmap.width;
+        if (image.height !== bitmap.height) image.height = bitmap.height;
+        ctx.drawImage(bitmap, 0, 0);
+        if (!image.isConnected) display.append(image);
+      } finally {
         bitmap.close();
       }
     } catch {
       if (!stopped) onerror();
     } finally {
       drawing = false;
+      if (queued) schedulePaint();
     }
+  }
+
+  ws.onmessage = event => {
+    queued = event.data;
+    schedulePaint();
   };
   ws.onclose = () => { if (!stopped) onerror(); };
   return {
     stop() {
       stopped = true;
       queued = null;
+      cancelAnimationFrame(paint);
       ws.close();
     }
   };
@@ -133,7 +151,7 @@ input.onmessage = event => {
     ready = true;
     const onerror = () => { release(); input.close(); failed('映像切断'); };
     screen = msg.display === 'frames' ? connectFrameDisplay(onerror)
-      : new SpiceMainConn({uri:socketURL('/display'), screen_id:'display', onerror});
+      : new SpiceMainConn({uri:socketURL('display'), screen_id:'display', onerror});
     status();
   }
   if (msg.motion !== undefined) ack = msg.motion;
@@ -148,18 +166,37 @@ input.onclose = () => {
   pending.clear(); failed('接続が切れました');
 };
 $('reconnect').onclick = () => location.reload();
-function layout() {
-  canvas = display.querySelector('#spice_surface_0');
-  if (!canvas) return;
-  const scale = fit ? Math.min(stage.clientWidth/canvas.width,stage.clientHeight/canvas.height) : 1;
-  display.style.transform = 'scale('+scale+')';
-  frame.style.width = canvas.width*scale+'px';
-  frame.style.height = canvas.height*scale+'px';
-  status();
+let layoutFrame = 0;
+let laidOutCanvas, laidOutWidth, laidOutHeight, laidOutScale;
+
+function scheduleLayout() {
+  if (!layoutFrame) layoutFrame = requestAnimationFrame(layout);
 }
-new MutationObserver(layout).observe(display,{childList:true,subtree:true,attributes:true,attributeFilter:['width','height']});
-new ResizeObserver(layout).observe(stage);
-$('fit').onclick = () => { fit=!fit; $('fit').setAttribute('aria-pressed',fit); layout(); };
+
+function layout() {
+  layoutFrame = 0;
+  canvas = display.firstElementChild?.id === 'spice_surface_0' ? display.firstElementChild :
+    display.querySelector('#spice_surface_0');
+  if (!canvas || !canvas.width || !canvas.height) return;
+  const scale = fit ? Math.min(stage.clientWidth / canvas.width, stage.clientHeight / canvas.height) : 1;
+  const width = canvas.width * scale;
+  const height = canvas.height * scale;
+  if (laidOutCanvas === canvas && laidOutWidth === width && laidOutHeight === height && laidOutScale === scale) return;
+  laidOutCanvas = canvas;
+  laidOutWidth = width;
+  laidOutHeight = height;
+  laidOutScale = scale;
+  display.style.transform = 'scale(' + scale + ')';
+  frame.style.width = width + 'px';
+  frame.style.height = height + 'px';
+  if (ready) status();
+}
+
+new MutationObserver(scheduleLayout).observe(display, {
+  childList: true, subtree: true, attributes: true, attributeFilter: ['width', 'height']
+});
+new ResizeObserver(scheduleLayout).observe(stage);
+$('fit').onclick = () => { fit = !fit; $('fit').setAttribute('aria-pressed', fit); scheduleLayout(); };
 $('full').onclick = () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(e=>notify(e.message));
 function coords(e) {
   const r = surface.getBoundingClientRect();

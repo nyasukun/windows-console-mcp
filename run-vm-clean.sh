@@ -4,7 +4,7 @@ umask 077
 cd /vm-clean
 
 if [[ ! -f disk.qcow2 ]]; then
-  qemu-img create -f qcow2 disk.qcow2 80G
+  qemu-img create -f qcow2 disk.qcow2 "${WINDOWS_DISK_GIB:-80}G"
 fi
 if [[ ! -f OVMF_VARS.fd ]]; then
   cp /usr/share/OVMF/OVMF_VARS_4M.ms.fd OVMF_VARS.fd
@@ -43,9 +43,38 @@ if [[ -f setup/console-tools.iso ]]; then
   )
 fi
 
+transfer_net=10.77.0.0/24
+transfer_host=10.77.0.4
+if [[ ${WINDOWS_MANAGED:-0} == 1 ]]; then
+  transfer_net=${WINDOWS_TRANSFER_NET:-$transfer_net}
+  transfer_host=${WINDOWS_TRANSFER_HOST:-$transfer_host}
+  network_restrict=on
+  if [[ ${WINDOWS_INTERNET:-0} == 1 && -z ${WINDOWS_TAP:-} ]]; then
+    network_restrict=off
+  fi
+fi
+
+network=(
+  -netdev "user,id=transfernet,net=$transfer_net,ipv6=off,restrict=$network_restrict,guestfwd=tcp:$transfer_host:80-cmd:/usr/bin/python3 /vm-clean/transfer-relay.py"
+  -device e1000e,id=transfernic,netdev=transfernet,mac=52:54:00:77:00:04
+)
+display=0.0.0.0:12
+monitor=()
+if [[ ${WINDOWS_MANAGED:-0} == 1 ]]; then
+  if [[ -n ${WINDOWS_TAP:-} ]]; then
+    network+=(
+      -netdev "tap,id=lan,ifname=$WINDOWS_TAP,script=no,downscript=no"
+      -device "e1000e,netdev=lan,mac=$WINDOWS_MAC"
+    )
+  fi
+  rm -f vnc.sock manage.sock
+  display=unix:/vm-clean/vnc.sock
+  monitor=(-qmp unix:manage.sock,server=on,wait=off)
+fi
+
 exec qemu-system-x86_64 \
   -name 'Windows 11 clean setup' -machine q35,smm=on,accel=kvm -cpu host \
-  -smp 4 -m 8G \
+  -smp "${WINDOWS_VCPUS:-4}" -m "${WINDOWS_RAM_MIB:-8192}M" \
   -global driver=cfi.pflash01,property=secure,value=on \
   -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.secboot.fd \
   -drive if=pflash,format=raw,file=OVMF_VARS.fd \
@@ -60,8 +89,7 @@ exec qemu-system-x86_64 \
   -serial chardev:consoletext \
   -boot menu=on -device qemu-xhci \
   -device usb-ehci,id=ehci -device usb-tablet,bus=ehci.0 \
-  -netdev "user,id=transfernet,net=10.77.0.0/24,ipv6=off,restrict=$network_restrict,guestfwd=tcp:10.77.0.4:80-cmd:/usr/bin/python3 /vm-clean/transfer-relay.py" \
-  -device e1000e,id=transfernic,netdev=transfernet,mac=52:54:00:77:00:04 \
+  "${network[@]}" \
   "${spice_options[@]}" \
   -object secret,id=vncpass,file=/vm-clean/vnc-password \
-  -display none -vnc 0.0.0.0:12,password-secret=vncpass -qmp unix:qmp.sock,server=on,wait=off
+  -display none -vnc "$display,password-secret=vncpass" -qmp unix:qmp.sock,server=on,wait=off "${monitor[@]}"

@@ -1,6 +1,6 @@
 # Windows Console
 
-Mac で SSH を起動し、Chrome で http://127.0.0.1:6083/ を開きます。
+Mac で SSH を起動し、Chrome で http://127.0.0.1:6083/vms/ を開き、利用する VM の「コンソール」を選びます。
 
 ```sh
 ssh -N -o ExitOnForwardFailure=yes -L 6083:127.0.0.1:6083 vm-host
@@ -10,6 +10,26 @@ ssh -N -o ExitOnForwardFailure=yes -L 6083:127.0.0.1:6083 vm-host
 - 画面をクリックしてキー入力します。画面上の入力先をクリックすると、Mac の IME で直接変換できます。候補と変換中の文字は最後にクリックした位置付近に表示され、確定した文字が Windows に Unicode 入力されます。「日本語入力」で Mac 側の IME を使って文章を作り、⌘+Enter で Windows のアクティブな入力欄に送ります。キーの押下状態はフォーカス喪失時や接続終了時に解放します。
 - Windows で文字を選択し「選択をコピー」、またはブラウザで「貼り付け」を押します。対象は UTF-8 換算で一度に 64 KiB までのプレーンテキストです。「日本語入力」パネルからの送信と貼り付けには Windows のクリップボードを使用します。画面への直接 IME 入力はクリップボードを使いません。Chrome が求めた場合はこの localhost ページへのクリップボード権限を許可します。
 - 黒い画面から Windows のサインインや UEFI を操作する場合も物理キーとマウスは使えます。クリップボードと確定済みテキストの送信にはログイン中のユーザーセッションが必要です。
+
+## VM 管理
+
+Web の `/vms/` と MCP は同じインベントリを使用します。次のツールで作成した VM は Web の一覧に表示され、個別の画面を開けます。
+
+| MCP ツール | 用途 |
+| --- | --- |
+| `vm_inventory` | 管理対象 VM と電源状態、テンプレート、利用可能な ISO ID、トポロジの一覧 |
+| `vm_template_save` | ISO と vCPU・RAM・ディスク容量の組み合わせを追加・編集 |
+| `vm_template_delete` | テンプレートを削除 |
+| `vm_create` | `template_id` から停止状態の VM を作成 |
+| `vm_start` / `vm_stop` / `vm_delete` | 管理対象 VM の起動・停止・削除。稼働中の VM を強制停止して削除する場合は `vm_delete` に `force: true` を明示 |
+| `vm_topology_save` / `vm_topology_delete` | IPv4 セグメントと透過プロキシ設定を持つルーターを管理 |
+| `vm_set_network` | 停止中の VM の接続トポロジとセグメントを変更 |
+
+`vm_create` や `vm_set_network` でネットワークに接続する場合は、`topology_id` と `segment`（例 `10.40.0.0/24`）を指定します。
+
+`vm_inventory` で得た `vm_id` は、`vm_status`、`vm_power`、`vm_set_internet`、ISO、`console_*`、`file_*` に渡せます。ライブ配信は `console_stream_open` で VM を指定し、以降は返された `stream_id` を使います。ファイル転送のチャンク・完了操作には同じ `vm_id` を渡してください。ローカルのファイル CLI では `--vm-id` が使えます。
+
+ID を省略した既存の呼び出しは登録済みの旧 VM を優先します。その VM を削除したあと、管理対象が1台ならその VM を選びます。新規 VM が複数台の場合は ID を指定してください。トポロジーに接続した VM の外部接続は `vm_topology_save` で変更します。トポロジーに接続していない VM では `vm_set_internet` が個別 NAT を設定します。
 
 ## 構成
 
@@ -21,7 +41,7 @@ ssh -N -o ExitOnForwardFailure=yes -L 6083:127.0.0.1:6083 vm-host
 uv run --locked --project console/mcp python console/setup_media.py
 ```
 
-`run-vm-clean.sh` の COM1、既存の SPICE ソケット、`state-clean/qmp.sock` を使用します。Web サービスは `systemctl --user restart windows-html-console` で再起動できます。単独起動には `console/start.sh` を使います。
+`run-vm-clean.sh` が VM ごとの COM1、SPICE、QMP の Unix ソケットを用意します。Web サービスは `systemctl --user restart windows-html-console` で再起動できます。単独起動には `console/start.sh` を使います。
 
 操作パネルとテキスト入力は [Apache Guacamole](https://guacamole.apache.org/doc/gug/using-guacamole.html)、物理キーとフォーカス管理は [noVNC](https://github.com/novnc/noVNC/blob/master/core/input/keyboard.js) の設計を参考にしています。
 
@@ -45,13 +65,13 @@ codex mcp add windows-console -- ssh -T -o BatchMode=yes vm-host .local/bin/wind
 | --- | --- |
 | VM の状態と電源 | `vm_status` で Docker と QEMU の状態を取得。`vm_power` に `start`、`shutdown`、`restart` を指定。終了は ACPI の電源ボタン経由で、再起動は終了を確認してから起動します。Windows の電源ポリシーや保存確認で終了が保留された場合はタイムアウトを返します。 |
 | インターネット接続 | `vm_internet_status` で現在と次回起動時の設定を確認。`vm_set_internet` に `{"enabled":true}` または `{"enabled":false}` を渡すと、外向きの IPv4 NAT を次回起動から切り替えます。稼働中の VM にすぐ反映する場合は `"apply_now":true` も指定します。正常終了がタイムアウトした場合は設定が次回起動用に残ります。ファイル転送用 URL はどちらの設定でも利用できます。 |
-| イメージ選択 | `list_images` の `images[].id` を `select_image` に渡します。対象はプロジェクト直下と `state-clean` 直下の ISO です。実行中は CD ドライブに交換し、停止中は次回起動用に選択します。`current` と `next_boot` は QEMU 側のパスです。起動順は OS ディスクが先です。 |
+| イメージ選択 | `list_images` の `images[].id` を `select_image` に渡します。対象は ISO カタログと対象 VM の状態ディレクトリ直下の ISO です。実行中は CD ドライブに交換し、停止中は次回起動用に選択します。`current` と `next_boot` は QEMU 側のパスです。起動順は OS ディスクが先です。 |
 | 画面とマウス | `console_screen` はゲストの PNG を返します。`console_pointer` は移動、クリック、ダブルクリック、ホイールに対応。`console_drag` は左ボタンでドラッグします。PNG の幅 W、高さ H のピクセル (x, y) は `round(x*32767/(W-1))`、`round(y*32767/(H-1))` に換算します。 |
 | キー・日本語・コピー | `console_keys` は例として `["ctrl","a"]`、`["ret"]`。`console_text` は日本語を Unicode 入力し、`method="paste"` で貼り付けます。`console_copy_selection` は選択した文字列を返します。テキスト操作にはサインイン中の COM1 ヘルパーが必要です。 |
 | CLI | `console_open_terminal` の `shell` に `powershell` または `cmd` を指定。画面でプロンプトを確認してから `console_cli` にコマンドを1行渡します。応答は Enter の送信確認です。結果は同じ Windows 画面で読み取るか、出力を選択してコピーできます。 |
 | コンソール設定 | `console_settings` で待受ポート、サービス状態、URL、SSH 転送引数を取得。`configure_console` に 1024〜65535 の `port` を指定すると、Web サービスを再起動して疎通を確認します。ブラウザは返された URL に再接続します。 |
 
-管理用 Unix ソケットは `state-clean/console-admin.sock`（0600）です。MCP 入力とブラウザ入力は同じコンソールサーバーで順序を管理します。ブラウザでキーやマウスボタンを押している間に MCP が操作を要求した場合は、離してから再試行します。スクリーンショットの一時ファイルは応答生成時に削除します。
+管理用 Unix ソケットは `state-console/console-admin.sock`（0600）です。MCP 入力とブラウザ入力は同じコンソールサーバーで順序を管理します。ブラウザでキーやマウスボタンを押している間に MCP が操作を要求した場合は、離してから再試行します。スクリーンショットの一時ファイルは応答生成時に削除します。
 
 ### Windows のクリップボードを直接読み書きする
 
@@ -109,7 +129,7 @@ uv run --project console/mcp python console/mcp/files.py --ssh vm-host receive T
 uv run --project console/mcp python console/mcp/files.py --ssh vm-host discard TRANSFER_ID
 ```
 
-`send` と `request-upload` は転送 ID と Windows 用 URL を JSON で返します。URL は転送ごとにランダムに発行され、パスワード入力は不要です。QEMU の制限付きユーザーネットワークが `10.77.0.4:80` 宛ての接続だけをホスト上の転送専用 Unix ソケットへ中継します。VM は起動時に Intel 82574L（e1000e）を接続します。Windows 11 25H2 には対応ドライバーが含まれます。発行結果の `guest_network` は、接続済みなら `attached`、停止中は `on_next_start` です。更新前から稼働している VM で `requires_cold_start` と表示された場合は、Windows を正常終了して VM を起動すると、同じ URL が使えます。MCP の SSH 接続と Web コンソールの転送設定はそのまま使用できます。
+`send` と `request-upload` は転送 ID と Windows 用 URL を JSON で返します。URL は転送ごとにランダムに発行され、パスワード入力は不要です。QEMU は返されたゲスト専用アドレスの HTTP 接続を、その VM の転送専用 Unix ソケットへ中継します。通常は `10.77.0.4:80` を使い、トポロジーと重複する場合は別のアドレスを返します。VM は起動時に Intel 82574L（e1000e）を接続します。Windows 11 25H2 には対応ドライバーが含まれます。発行結果の `guest_network` は、接続済みなら `attached`、停止中は `on_next_start` です。更新前から稼働している VM で `requires_cold_start` と表示された場合は、Windows を正常終了して VM を起動すると、同じ URL が使えます。MCP の SSH 接続と Web コンソールの転送設定は引き継がれます。旧 VM を削除した後も、それ以前の転送 ID を使ったホスト側の状態取得・読み出しは ID を省略して呼び出せます。
 
 ## MCP の画面ストリームと連続操作
 

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>VM 管理 · Windows Console</title>
+  <link rel="stylesheet" href="/ui/manager.css">
+  <link rel="stylesheet" href="/ui/topology.css">
+  <script type="module" src="/ui/manager.js"></script>
+</head>
+<body>
+  <header class="bar"><strong>Windows Console</strong></header>
+  <main>
+    <fieldset id="management-controls">
+      <section class="heading">
+        <div><h1>VM 管理</h1><p>Windows VM の作成、電源操作、ネットワーク接続を管理します。</p></div>
+        <button id="refresh" type="button">更新</button>
+      </section>
+      <p id="message" role="status" hidden></p>
+      <p id="operation" role="status" hidden></p>
+      <div id="recovery" class="recovery" hidden></div>
+      <section class="panel" aria-labelledby="vm-heading">
+        <div class="section-heading">
+          <h2 id="vm-heading">仮想マシン <span id="vm-count" class="count"></span></h2>
+          <button type="button" class="primary" id="new-vm">＋ VM を作成</button>
+        </div>
+        <div id="vms"></div>
+      </section>
+      <section class="panel management-section" aria-labelledby="network-heading">
+        <div class="section-heading">
+          <h2 id="network-heading">ネットワークトポロジー</h2>
+          <button type="button" id="new-topology">＋ トポロジーを追加</button>
+        </div>
+        <div id="topologies"></div>
+      </section>
+      <section class="panel management-section" aria-labelledby="template-heading">
+        <div class="section-heading">
+          <h2 id="template-heading">テンプレート</h2>
+          <button type="button" id="new-template">＋ テンプレートを追加</button>
+        </div>
+        <div id="templates"></div>
+      </section>
+    </fieldset>
+  </main>
+  <dialog id="editor" aria-labelledby="form-title">
+    <form id="editor-form">
+      <h2 id="form-title"></h2>
+      <div id="fields"></div>
+      <p id="form-error" role="alert" hidden></p>
+      <footer><button type="button" id="cancel">キャンセル</button><button type="submit" class="primary" id="submit">保存</button></footer>
+    </form>
+  </dialog>
+  <dialog id="agent-guide" aria-labelledby="agent-guide-title">
+    <div class="guide-heading">
+      <h2 id="agent-guide-title">AIエージェントで操作</h2>
+      <form method="dialog"><button type="submit">閉じる</button></form>
+    </div>
+    <p id="agent-target" class="meta"></p>
+    <section>
+      <h3>MCPを接続する</h3>
+      <p>Codex CLIをVMホストで使う場合は、リポジトリ直下で実行します。</p>
+      <pre id="mcp-local">codex mcp add windows-console -- "$(pwd)/console/mcp/start.sh"</pre>
+      <button type="button" data-copy="mcp-local">ローカル接続コマンドをコピー</button>
+      <p>別端末から接続する場合は、SSHのホスト名を置き換えてください。ホスト側には <code>~/.local/bin/windows-console-mcp</code> の起動リンクが必要です。</p>
+      <pre id="mcp-ssh">codex mcp add windows-console -- ssh -T -o BatchMode=yes vm-host .local/bin/windows-console-mcp</pre>
+      <button type="button" data-copy="mcp-ssh">SSH接続コマンドをコピー</button>
+      <details>
+        <summary>その他のstdio対応MCPクライアント</summary>
+        <p>クライアントのMCP設定に追加し、起動スクリプトをホスト上の絶対パスに置き換えます。</p>
+        <pre id="mcp-json">{
+  "mcpServers": {
+    "windows-console": {
+      "command": "/path/to/windows/console/mcp/start.sh",
+      "args": []
+    }
+  }
+}</pre>
+        <button type="button" data-copy="mcp-json">stdio設定の例をコピー</button>
+      </details>
+      <p>接続を追加したら、エージェントで <code>vm_inventory</code> を呼び出せることを確認します。</p>
+    </section>
+    <section>
+      <h3>AIエージェントへの指示例</h3>
+      <pre id="prompt-setup"></pre>
+      <button type="button" data-copy="prompt-setup">起動・セットアップ確認の指示をコピー</button>
+      <pre id="prompt-operate"></pre>
+      <button type="button" data-copy="prompt-operate">画面確認の指示をコピー</button>
+    </section>
+    <p id="copy-feedback" role="status"></p>
+  </dialog>
+</body>
+</html>

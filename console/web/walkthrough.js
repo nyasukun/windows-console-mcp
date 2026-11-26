@@ -67,7 +67,7 @@ const resize = new ResizeObserver(() => {
 });
 resize.observe(layer);
 resize.observe(caption);
-const feed = new EventSource('/walkthrough');
+const feed = new EventSource(new URL('walkthrough', location.href));
 feed.addEventListener('step', event => show(JSON.parse(event.data)));
 feed.addEventListener('pointer', event => {
   if (!step) return;

@@ -23,6 +23,8 @@ async def run(args):
         await session.initialize()
 
         async def call(name, **kwargs):
+            if args.vm_id is not None:
+                kwargs['vm_id'] = args.vm_id
             reply = await session.call_tool(name, kwargs)
             if reply.isError:
                 raise RuntimeError(reply.content[0].text)
@@ -87,6 +89,7 @@ async def run(args):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--vm-id', help='Target VM id from vm_inventory')
     parser.add_argument('--ssh', help='Run the MCP server on this SSH host')
     parser.add_argument('--remote-command', default='.local/bin/windows-console-mcp',
                         help='Path to the MCP launcher on the SSH host')

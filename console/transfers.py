@@ -26,20 +26,21 @@ def filename(value):
     return value
 
 
-def directory(token):
+def directory(token, *, store=None):
     if not re.fullmatch('[0-9a-f]{48}', token):
         raise ValueError('Unknown transfer')
-    return STORE / token
+    return (STORE if store is None else store) / token
 
 
-def create(direction, name=None, size=None):
+def create(direction, name=None, size=None, *, store=None):
     if direction == 'to_vm':
         filename(name)
         if type(size) is not int or size < 0:
             raise ValueError('size must be nonnegative')
-    STORE.mkdir(exist_ok=True, mode=0o700)
+    store = STORE if store is None else store
+    store.mkdir(parents=True, exist_ok=True, mode=0o700)
     token = secrets.token_hex(24)
-    slot = directory(token)
+    slot = directory(token, store=store)
     slot.mkdir(mode=0o700)
     try:
         (slot / 'lock').touch(mode=0o600)
@@ -52,8 +53,8 @@ def create(direction, name=None, size=None):
 
 
 @contextmanager
-def locked(token, exclusive=False):
-    slot = directory(token)
+def locked(token, exclusive=False, *, store=None):
+    slot = directory(token, store=store)
     try:
         lock = (slot / 'lock').open('rb')
     except FileNotFoundError as exc:
@@ -69,8 +70,8 @@ def locked(token, exclusive=False):
         yield slot, json.loads((slot / 'meta').read_text())
 
 
-def describe(token):
-    slot = directory(token)
+def describe(token, *, store=None, host=GUEST_HOST):
+    slot = directory(token, store=store)
     # Polling a multi-hour browser upload must not wait for its writer lock.
     # Publishing renames partial to payload atomically; retry that one race.
     for _ in range(2):
@@ -85,11 +86,11 @@ def describe(token):
         raise ValueError('Unknown transfer')
     result = dict(transfer_id=token, **meta, ready=ready, bytes=current, max_chunk=CHUNK)
     if ready or meta['direction'] == 'from_vm':
-        result['url'] = f'http://{GUEST_HOST}/f/{token}'
+        result['url'] = f'http://{host}/f/{token}'
     return result
 
 
-def write_chunk(token, offset, encoded):
+def write_chunk(token, offset, encoded, *, store=None):
     if len(encoded) > 4 * ((CHUNK + 2) // 3):
         raise ValueError('Chunk too large')
     try:
@@ -98,7 +99,7 @@ def write_chunk(token, offset, encoded):
         raise ValueError('Invalid base64') from exc
     if not raw or len(raw) > CHUNK or offset < 0:
         raise ValueError('Invalid chunk size or offset')
-    with locked(token, True) as (slot, meta):
+    with locked(token, True, store=store) as (slot, meta):
         if meta['direction'] != 'to_vm' or (slot / 'payload').exists():
             raise ValueError('Transfer is not accepting MCP writes')
         if offset + len(raw) > meta['size']:
@@ -122,8 +123,8 @@ def write_chunk(token, offset, encoded):
             return {'next_offset':size}
 
 
-def publish(token):
-    with locked(token, True) as (slot, meta):
+def publish(token, *, store=None):
+    with locked(token, True, store=store) as (slot, meta):
         if meta['direction'] != 'to_vm':
             raise ValueError('Expected a download transfer')
         if not (slot / 'payload').exists():
@@ -133,10 +134,10 @@ def publish(token):
             partial.replace(slot / 'payload')
 
 
-def read_chunk(token, offset, length):
+def read_chunk(token, offset, length, *, store=None):
     if not 0 < length <= CHUNK or offset < 0:
         raise ValueError('Invalid chunk size or offset')
-    with locked(token) as (slot, meta):
+    with locked(token, store=store) as (slot, meta):
         if meta['direction'] != 'from_vm' or not (slot / 'payload').is_file():
             raise ValueError('No completed VM upload')
         with (slot / 'payload').open('rb') as file:
@@ -160,6 +161,6 @@ def finish_upload(slot, meta, name, size):
     (slot / 'partial').replace(slot / 'payload')
 
 
-def discard(token):
-    with locked(token, True) as (slot, _):
+def discard(token, *, store=None):
+    with locked(token, True, store=store) as (slot, _):
         shutil.rmtree(slot)

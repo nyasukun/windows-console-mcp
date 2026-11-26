@@ -11,6 +11,8 @@ from aiohttp import MultipartReader, web
 import transfers
 from control_config import ROOT, STATE
 
+TRANSFER_ENDPOINT = web.AppKey('transfer-endpoint', tuple)
+
 FORM = """<!doctype html><html lang="ja"><meta charset="utf-8"><title>ファイル転送</title>
 <body><main><h1>VM からファイルを送信</h1>
 <form method="post" enctype="multipart/form-data">
@@ -26,11 +28,12 @@ def page(text):
 
 async def guest_file(request):
     token = request.match_info['token']
-    if request.host not in (transfers.GUEST_HOST, transfers.GUEST_HOST + ':80'):
+    store, host = request.app.get(TRANSFER_ENDPOINT, (None, transfers.GUEST_HOST))
+    if request.host not in (host, host + ':80'):
         raise web.HTTPNotFound()
     writing = request.method == 'POST'
     try:
-        with transfers.locked(token, exclusive=writing) as (slot, meta):
+        with transfers.locked(token, exclusive=writing, store=store) as (slot, meta):
             if meta['direction'] == 'to_vm':
                 if writing:
                     raise web.HTTPMethodNotAllowed('POST', ['GET', 'HEAD'])
@@ -80,20 +83,38 @@ async def guest_file(request):
         raise web.HTTPConflict(text=str(exc)) from exc
 
 
+def install_relay(state):
+    # The relay must be visible in the QEMU container for guestfwd connections. Replace atomically across upgrades.
+    relay = state / 'transfer-relay.py'
+    source = (ROOT / 'transfer_relay.py').read_bytes()
+    if not relay.exists() or relay.read_bytes() != source:
+        with tempfile.NamedTemporaryFile(dir=state, delete=False) as out:
+            try:
+                out.write(source)
+                out.flush()
+                os.replace(out.name, relay)
+            finally:
+                Path(out.name).unlink(missing_ok=True)
+
 class GuestServer:
-    def __init__(self):
+    def __init__(self, state=None, host=transfers.GUEST_HOST):
+        self.state = state or STATE
+        self.host = host
+        self.store = self.state / 'transfers' if state is not None else None
         self.runner = None
         self.lock = asyncio.Lock()
 
     async def listen(self):
         if self.runner:
             return
+        self.state.mkdir(mode=0o700, parents=True, exist_ok=True)
         guest = web.Application(client_max_size=0)
+        guest[TRANSFER_ENDPOINT] = (self.store, self.host)
         guest.router.add_get('/f/{token}', guest_file)
         guest.router.add_post('/f/{token}', guest_file)
         runner = web.AppRunner(guest, access_log=None)
         await runner.setup()
-        path = STATE / 'transfer-http.sock'
+        path = self.state / 'transfer-http.sock'
         try:
             await web.UnixSite(runner, str(path)).start()
             path.chmod(0o600)
@@ -105,17 +126,7 @@ class GuestServer:
     async def ensure(self, monitor):
         async with self.lock:
             await self.listen()
-            # The relay must be visible in the QEMU container for guestfwd connections. Replace atomically across upgrades.
-            relay = STATE / 'transfer-relay.py'
-            source = (ROOT / 'transfer_relay.py').read_bytes()
-            if not relay.exists() or relay.read_bytes() != source:
-                with tempfile.NamedTemporaryFile(dir=STATE, delete=False) as out:
-                    try:
-                        out.write(source)
-                        out.flush()
-                        os.replace(out.name, relay)
-                    finally:
-                        Path(out.name).unlink(missing_ok=True)
+            install_relay(self.state)
             if monitor is None:
                 return {'guest_network':'on_next_start'}
             devices = await monitor.command('qom-list', {'path':'/machine/peripheral'})
@@ -127,3 +138,4 @@ class GuestServer:
     async def close(self):
         if self.runner:
             await self.runner.cleanup()
+            self.runner = None

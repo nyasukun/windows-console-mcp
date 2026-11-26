@@ -6,6 +6,7 @@ from aiohttp import WSMsgType, web
 from control_config import KEYS
 
 BUTTONS = {'left', 'middle', 'right', 'side', 'extra'}
+CONSOLE_SESSION = web.RequestKey('console-session', dict)
 
 
 def transition(kind, name, down):
@@ -46,7 +47,7 @@ def prepare(events, pressed):
 
 
 async def batch_input(request):
-    shared = request.app['shared']
+    shared = request.get(CONSOLE_SESSION) or request.app['shared']
     ws = web.WebSocketResponse(heartbeat=15, max_msg_size=100000)
     await ws.prepare(request)
     gate = shared['input_lock']

@@ -1,2 +1,5 @@
 **
 !Dockerfile
+!console/
+!console/network/
+!console/network/*.py

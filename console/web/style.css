@@ -105,3 +105,10 @@ dialog::backdrop { background: #070b1199; }
   clip-path: polygon(0 0, 100% 57%, 60% 64%, 83% 93%, 66% 100%, 43% 69%, 14% 93%);
   transform-origin: top left; transform: scale(var(--face-x, 1), var(--face-y, 1));
 }
+
+.manager-link {
+  color: inherit;
+  font-size: .85rem;
+  padding: .4rem .5rem;
+  white-space: nowrap;
+}
