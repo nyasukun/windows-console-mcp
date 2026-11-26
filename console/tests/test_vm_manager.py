@@ -86,6 +86,18 @@ class ManagedVMTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((self.media / 'large.iso').read_bytes(), contents)
         self.assertEqual(list(self.media.glob('.iso-upload-*')), [])
 
+    async def test_iso_blocked_by_unlisted_container_explains_why(self):
+        image_id = self.template['image_id']
+        container = {'Id': 'legacy-id', 'Name': '/old-windows', 'State': {'Status': 'exited'},
+                     'Mounts': [{'Destination': '/media/windows11.iso',
+                                 'Source': str(self.media / image_id)}]}
+        with patch.object(self.manager, 'docker', side_effect=['legacy-id', json.dumps([container]), '']):
+            with self.assertRaisesRegex(Conflict, 'VM一覧に未登録.*old-windows.*停止済み'):
+                await service.vm_iso_delete(image_id)
+            self.assertTrue((self.media / image_id).is_file())
+            self.assertEqual(await service.vm_iso_delete(image_id), {'deleted': image_id})
+        self.assertFalse((self.media / image_id).exists())
+
     async def test_sse_token_is_only_revealed_on_same_origin_post(self):
         path = self.media / 'test-token'
         token = b'local-probe-token-contains-no-secret'

@@ -224,8 +224,11 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
         await page.get_by_role('button', name='AIエージェントで操作', exact=True).click(timeout=3000)
         guide = page.get_by_role('dialog', name='AIエージェントで操作')
         await expect(guide.get_by_text('VM作成前', exact=False)).to_be_visible()
+        await expect(guide.get_by_role('link', name='Windows 11 x64 ISO')).to_have_attribute(
+            'href', 'https://www.microsoft.com/ja-jp/software-download/windows11')
         await guide.get_by_role('button', name='最初のVMを作成する指示をコピー').click()
         prompt = await page.evaluate('navigator.clipboard.readText()')
+        self.assertIn('https://www.microsoft.com/ja-jp/software-download/windows11', prompt)
         for tool in ('vm_inventory', 'vm_template_save', 'vm_create', 'vm_start', 'console_screen'):
             self.assertIn(tool, prompt)
         await guide.get_by_text('OpenCode', exact=True).click()

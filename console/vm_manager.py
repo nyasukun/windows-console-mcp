@@ -183,10 +183,19 @@ class VMManager:
             # Existing containers retain their bind mount across stops, including the legacy VM.
             containers = self.docker('container', 'ls', '-aq', '--filter', 'volume=/media/windows11.iso').split()
             if containers:
+                registered = {self.vm_container(vm) for vm in inventory['vms'].values()}
                 for container in json.loads(self.docker('container', 'inspect', *containers)):
                     if any(mount['Destination'] == '/media/windows11.iso'
                            and Path(mount['Source']).resolve() == path for mount in container['Mounts']):
-                        raise Conflict('ISOを使用中のコンテナがあります · ' + container['Name'].lstrip('/'))
+                        name = container['Name'].lstrip('/')
+                        status = container['State']['Status']
+                        if {name, container['Id']} & registered:
+                            raise Conflict(f'VM一覧のVMがISOを参照しています · {name}')
+                        if status in STOPPED:
+                            raise Conflict(f'VM一覧に未登録のコンテナがISOを参照しています · {name}（停止済み）。'
+                                           'Dockerで用途を確認し、不要なコンテナを削除してから再試行してください。')
+                        raise Conflict(f'VM一覧に未登録のコンテナがISOを参照しています · {name}（{status}）。'
+                                       'Docker上でISOの参照を解除してから再試行してください。')
             path.unlink()
             if inventory.get('iso_names', {}).pop(image_id, None) is not None:
                 self.save(inventory)

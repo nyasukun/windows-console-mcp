@@ -60,6 +60,7 @@ export function openAgentGuide(vm = {}) {
   const copySetup = document.querySelector('#copy-setup');
   const target = document.querySelector('#agent-target');
   document.querySelector('#agent-operate').hidden = !vm.id;
+  document.querySelector('#iso-acquisition').hidden = Boolean(vm.id);
   if (vm.id) {
     const prompt = 'Windows Console MCP のツールで操作してください。対象の vm_id は ' + vm.id + ' です。\n';
     target.textContent = [name, vm.id].filter(Boolean).join(' · ');
@@ -72,8 +73,13 @@ export function openAgentGuide(vm = {}) {
     target.textContent = name ? 'VM作成前 · ' + name : 'VM作成前';
     const selection = vm.templateId
       ? 'フォームで選んだ template_id は ' + vm.templateId + '、ネットワーク設定は ' + JSON.stringify(vm.network) + ' です。'
-      : '使えるテンプレートと ISO を示し、使うテンプレートまたは ISO とネットワークを私に確認してください。テンプレートがなければ、確認した ISO とサイズで vm_template_save を使って作成してください。ISO がなければ、VM 管理画面の「ISO を登録」を案内してください。ホスト上のファイルの絶対パスを私が指定した場合は、vm_iso_register を使えます。';
-    setup.textContent = 'Windows Console MCP で新規 Windows VM を作成したいです。まず vm_inventory で既存 VM、テンプレート、利用可能な ISO を調べてください。\n' +
+      : '使えるテンプレートと ISO を示し、使うテンプレートまたは ISO とネットワークを私に確認してください。テンプレートがなければ、確認した ISO とサイズで vm_template_save を使って作成してください。';
+    const officialISO = document.querySelector('#windows-iso-source').href;
+    const evaluationISO = document.querySelector('#windows-eval-source').href;
+    setup.textContent = 'Windows Console MCP で、ISOの入手から新規Windows VMのセットアップまで案内してください。まず vm_inventory で登録済みのISO、テンプレート、既存VMを確認してください。\n' +
+      '適切なISOがなければ、使うエディションと言語を私に確認し、Microsoft公式ページで x64 の ISO を選ぶ手順を案内してください。\n' +
+      'Windows 11 x64 ISO: ' + officialISO + '\nEnterprise 評価版: ' + evaluationISO + '\n' +
+      '手元に保存したISOはVM管理の「ISO を登録」でアップロードするよう案内してください。私がVMホスト上の絶対パスを指定した場合は vm_iso_register で登録し、vm_inventory で登録結果を確認してください。\n' +
       (name ? '新規 VM 名は ' + JSON.stringify(name) + ' です。' : 'VM 名は私に確認してください。') + '\n' + selection + '\n' +
       '同名の VM がある場合は新規作成する前に確認してください。構成が決まったら vm_create で作成し、vm_start で起動してください。作成した vm_id を報告し、同じ ID を console_screen に指定してセットアップ画面と次の選択肢を日本語で説明してください。ディスクやアカウントの選択は私の確認を待ってください。';
     copySetup.textContent = '最初のVMを作成する指示をコピー';
