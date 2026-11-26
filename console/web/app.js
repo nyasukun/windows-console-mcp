@@ -390,10 +390,11 @@ $('win').onclick=()=>{returnToConsole();send({op:'key',key:'meta_l',down:true});
 $('paste').onclick=()=>{surface.focus();report(navigator.clipboard.readText().then(paste));};
 $('copy').onclick=()=>{surface.focus();report(copy());};
 $('compose').onclick=()=>{$('editor').showModal();$('draft').focus();};
-$('editor').onclose=()=>surface.focus();
+$('editor').onclose=()=>{ $('editor-error').textContent=''; surface.focus(); };
 $('send').onclick=async()=>{
   $('send').disabled=true;
+  $('editor-error').textContent='';
   try {await paste($('draft').value);$('draft').value='';$('editor').close();}
-  catch(e){notify(e.message);}finally{$('send').disabled=false;}
+  catch(e){$('editor-error').textContent=e.message;}finally{$('send').disabled=false;}
 };
 $('draft').onkeydown=e=>{if(!e.isComposing && e.key==='Enter' && (e.ctrlKey||e.metaKey)){e.preventDefault();$('send').click();}};

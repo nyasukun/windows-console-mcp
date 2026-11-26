@@ -55,7 +55,13 @@ async def text_bridge(op, text='', state=None, check_socket=None):
                     if not answer.get('ok'):
                         raise ValueError(answer.get('error', 'Windows clipboard error'))
                     return base64.b64decode(answer.get('data', '')).decode()
-        raise ConnectionError('Windows text bridge disconnected')
+        raise ConnectionError('Windows の補助ツールとの接続が切れました')
+    except TimeoutError as exc:
+        raise TimeoutError(
+            'Windows の補助ツールから応答がありません。Windows にサインイン後、'
+            'エクスプローラーの「PC」から「CONSOLE_TOOLS」を開き、'
+            'install.cmd を実行してから再試行してください。'
+        ) from exc
     finally:
         writer.close()
         await writer.wait_closed()

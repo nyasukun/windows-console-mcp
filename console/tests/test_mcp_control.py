@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from aiohttp import WSServerHandshakeError, web
 from aiohttp.test_utils import TestClient, TestServer
@@ -76,6 +76,17 @@ class InputSharing(unittest.IsolatedAsyncioTestCase):
 
 
 class ClipboardControl(unittest.IsolatedAsyncioTestCase):
+    async def test_unresponsive_guest_tool_reports_manual_installation(self):
+        reader = AsyncMock()
+        reader.readline.side_effect = TimeoutError
+        writer = Mock()
+        writer.drain = AsyncMock()
+        writer.wait_closed = AsyncMock()
+        with patch.object(server.asyncio, 'open_unix_connection', return_value=(reader, writer)):
+            with self.assertRaisesRegex(TimeoutError, 'CONSOLE_TOOLS.*install.cmd'):
+                await server.text_bridge('ping')
+        writer.close.assert_called_once()
+
     async def test_clipboard_routes_read_write_and_clear_without_key_events(self):
         app = web.Application()
         monitor = AsyncMock()
