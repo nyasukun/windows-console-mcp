@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 import time
 import uuid
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 
 import legacy_vm
@@ -109,14 +109,88 @@ class VMManager:
             yield self.read()
 
     def images(self):
-        return [{'id': p.name, 'bytes': p.stat().st_size}
-                for p in sorted(self.media.glob('*')) if p.suffix.lower() == '.iso'
-                and not p.is_symlink() and p.is_file() and os.access(p, os.R_OK)]
+        names = self.read().get('iso_names', {})
+        result = []
+        for path in sorted(self.media.glob('*')):
+            if self.is_iso(path):
+                with suppress(FileNotFoundError):
+                    result.append({'id': path.name, 'name': names.get(path.name, path.name),
+                                   'bytes': path.stat().st_size})
+        return result
+
+    @staticmethod
+    def is_iso(path):
+        return (path.suffix.lower() == '.iso' and not path.is_symlink()
+                and path.is_file() and os.access(path, os.R_OK))
 
     def iso(self, image_id):
-        if not isinstance(image_id, str) or not any(image_id == p['id'] for p in self.images()):
+        if (not isinstance(image_id, str) or not image_id or '/' in image_id or '\0' in image_id
+                or not self.is_iso(self.media / image_id)):
             raise ValueError('一覧にあるインストールISOを指定してください')
         return self.media / image_id
+
+    @contextmanager
+    def iso_upload(self, image_id):
+        if (not isinstance(image_id, str) or Path(image_id).suffix.lower() != '.iso'
+                or re.search(r'[/\\\\\x00-\x1f\x7f]', image_id) or len(os.fsencode(image_id)) > 255):
+            raise ValueError('有効な .iso ファイル名を指定してください')
+        target = self.media / image_id
+        if os.path.lexists(target):
+            raise Conflict('同じファイル名のISOが登録されています')
+        self.media.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=self.media, prefix='.iso-upload-') as file:
+            yield file, target
+
+    def publish_iso(self, file, target):
+        size = file.tell()
+        if not size:
+            raise ValueError('空のISOは登録できません')
+        file.flush()
+        os.fsync(file.fileno())
+        with self.edit():
+            try:
+                os.link(file.name, target)
+            except FileExistsError as exc:
+                raise Conflict('同じファイル名のISOが登録されています') from exc
+        return {'id': target.name, 'name': target.name, 'bytes': size}
+
+    def register_iso(self, source):
+        path = Path(source)
+        if not path.is_absolute() or not self.is_iso(path):
+            raise ValueError('ホスト上の読み取り可能なISOの絶対パスを指定してください')
+        if path.parent.resolve() != self.media:
+            with self.iso_upload(path.name) as (file, target), path.open('rb') as input_file:
+                shutil.copyfileobj(input_file, file, 1024 * 1024)
+                return self.publish_iso(file, target)
+        return {'id': path.name, 'name': self.read().get('iso_names', {}).get(path.name, path.name),
+                'bytes': path.stat().st_size}
+
+    def rename_iso(self, image_id, name):
+        name = named(name)
+        with self.edit() as inventory:
+            path = self.iso(image_id)
+            inventory.setdefault('iso_names', {})[image_id] = name
+            self.save(inventory)
+            return {'id': image_id, 'name': name, 'bytes': path.stat().st_size}
+
+    def delete_iso(self, image_id):
+        with self.edit() as inventory:
+            path = self.iso(image_id)
+            users = [item['name'] for kind in ('templates', 'vms')
+                     for item in inventory[kind].values() if item['image_id'] == image_id]
+            if users:
+                raise Conflict('ISOを使用中です。先にテンプレートまたはVMの設定を確認してください · ' + '、'.join(users))
+            # Existing containers retain their bind mount across stops, including the legacy VM.
+            containers = self.docker('container', 'ls', '-aq', '--filter', 'volume=/media/windows11.iso').split()
+            if containers:
+                for container in json.loads(self.docker('container', 'inspect', *containers)):
+                    if any(mount['Destination'] == '/media/windows11.iso'
+                           and Path(mount['Source']).resolve() == path for mount in container['Mounts']):
+                        raise Conflict('ISOを使用中のコンテナがあります · ' + container['Name'].lstrip('/'))
+            path.unlink()
+            if inventory.get('iso_names', {}).pop(image_id, None) is not None:
+                self.save(inventory)
+        return {'deleted': image_id}
 
     def name(self, kind, ident):
         return f'windows-console-{self.scope}-{kind}-{ident}'
@@ -235,11 +309,11 @@ class VMManager:
                 'docker_error': error}
 
     def save_template(self, name, image_id, vcpus, ram_mib, disk_gib, template_id=None):
-        self.iso(image_id)
         values = dict(name=named(name), image_id=image_id, vcpus=number(vcpus, 1, 64, 'vCPU'),
                       ram_mib=number(ram_mib, 2048, 262144, 'RAM (MiB)'),
                       disk_gib=number(disk_gib, 32, 4096, 'ディスク (GiB)'))
         with self.edit() as inv:
+            self.iso(image_id)
             if template_id is not None:
                 inv['templates'][template_id]
             ident = template_id or uuid.uuid4().hex[:12]

@@ -38,7 +38,7 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
             self.manager = VMManager(state=root / 'state', media=original.parent, legacy_state=legacy)
             self.image_id = original.name
             self.addAsyncCleanup(self.remove_test_containers)
-        else:
+        elif self._testMethodName != 'test_manage_iso_from_empty_inventory':
             (media / self.image_id).touch()
         app = server.create_app(self.manager)
         app.cleanup_ctx.remove(server.admin_site)
@@ -84,7 +84,8 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
         self.page.set_default_timeout(8000)
         self.page.on('dialog', lambda dialog: dialog.accept())
         await self.page.goto(self.base + '/vms/')
-        await expect(self.page.locator('#new-template')).to_be_enabled()
+        if self._testMethodName != 'test_manage_iso_from_empty_inventory':
+            await expect(self.page.locator('#new-template')).to_be_enabled()
 
     async def remove_test_containers(self):
         def remove():
@@ -194,6 +195,27 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
         await page.get_by_role('button', name='保存', exact=True).click()
         await expect(row.get_by_text('外部接続なし')).to_be_visible()
         self.assertFalse((await self.call('vm_inventory'))['vms'][0]['internet_enabled'])
+
+    async def test_manage_iso_from_empty_inventory(self):
+        page = self.page
+        await page.locator('#new-vm').click(timeout=3000)
+        editor = page.get_by_role('dialog', name='ISO を登録')
+        await editor.get_by_label('ISO ファイル').set_input_files(
+            {'name': self.image_id, 'mimeType': 'application/octet-stream', 'buffer': b'installer'})
+        await editor.get_by_role('button', name='登録', exact=True).click()
+        template = page.get_by_role('dialog', name='テンプレートを追加')
+        await expect(template.get_by_label('インストール ISO')).to_have_value(self.image_id)
+        await template.get_by_role('button', name='キャンセル').click()
+        library = page.get_by_role('region', name='ISO 管理')
+        await library.get_by_role('button', name='名前変更').click()
+        await page.get_by_label('表示名').fill('Windows 11 テスト')
+        await page.get_by_role('button', name='保存', exact=True).click()
+        await expect(library.get_by_text('Windows 11 テスト', exact=True)).to_be_visible()
+        image, = (await self.call('vm_inventory'))['images']
+        self.assertEqual((image['id'], image['name']), (self.image_id, 'Windows 11 テスト'))
+        await library.get_by_role('button', name='削除', exact=True).click()
+        await expect(library.get_by_text('Windows 11 テスト', exact=True)).to_have_count(0)
+        self.assertFalse((await self.call('vm_inventory'))['images'])
 
     async def test_agent_guide_from_empty_inventory(self):
         page = self.page

@@ -18,6 +18,7 @@ Web の `/vms/` と MCP は同じインベントリを使用します。次の�
 | MCP ツール | 用途 |
 | --- | --- |
 | `vm_inventory` | 管理対象 VM と電源状態、テンプレート、利用可能な ISO ID、トポロジの一覧 |
+| `vm_iso_register` / `vm_iso_rename` / `vm_iso_delete` | ホスト上の絶対パスから ISO を登録、ID を保ったまま表示名を変更、未使用の ISO ファイルを削除 |
 | `vm_template_save` | ISO と vCPU・RAM・ディスク容量の組み合わせを追加・編集 |
 | `vm_template_delete` | テンプレートを削除 |
 | `vm_create` | `template_id` から停止状態の VM を作成 |
@@ -85,7 +86,18 @@ stdio と LAN の SSE の両方で使えます。既にインストール済み�
 
 ### LAN から SSE で接続する
 
+VM 管理の「AIエージェントで操作」→「SSE 接続」に、稼働中のサーバーの URL が表示されます。「トークンを表示」からトークンを個別にコピーできます。SSE 対応の OpenCode 向け設定もコピーでき、トークンはクライアントの `WINDOWS_CONSOLE_MCP_TOKEN` 環境変数で渡します。
+
 MCP クライアントでトランスポートに **SSE**、URL に `https://<ホストのLAN IP>:6084/sse` を指定します。SSE 接続とメッセージ送信の両方に `Authorization: Bearer <トークン>` ヘッダーを付け、ホストのサーバー証明書をクライアントで信頼します。
+
+OpenCode 1.18.34 では、コピーした設定をクライアントのプロジェクトに追加し、サーバーの公開証明書をクライアント端末に置いたうえで、次のように接続を確認できます。
+
+```sh
+read -rs WINDOWS_CONSOLE_MCP_TOKEN
+export WINDOWS_CONSOLE_MCP_TOKEN
+export NODE_EXTRA_CA_CERTS=/path/to/server.pem
+opencode mcp list
+```
 
 ホスト側では LAN IP とサブネット、IP を SAN に含む TLS 証明書と秘密鍵、ランダムなトークンを指定して起動します。次の IP は例です。
 

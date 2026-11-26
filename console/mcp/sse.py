@@ -10,6 +10,7 @@ from starlette.datastructures import Headers
 from starlette.responses import PlainTextResponse
 
 from service import create_session
+from sse_connection import publish_sse_connection
 
 
 def application(address, port, token):
@@ -58,9 +59,11 @@ def main():
     token = args.token_file.read_bytes().strip()
     if len(token) < 32 or not token.isascii() or any(byte <= 32 or byte >= 127 for byte in token):
         parser.error('Use a random ASCII bearer token of at least 32 characters')
-    uvicorn.run(application(args.bind, args.port, token), host=str(args.bind.ip), port=args.port,
-                ssl_certfile=args.cert, ssl_keyfile=args.key, proxy_headers=False,
-                access_log=False, lifespan='off', ws='none', timeout_graceful_shutdown=5)
+    url = f'https://{args.bind.ip}:{args.port}/sse'
+    with publish_sse_connection(url, args.token_file, token):
+        uvicorn.run(application(args.bind, args.port, token), host=str(args.bind.ip), port=args.port,
+                    ssl_certfile=args.cert, ssl_keyfile=args.key, proxy_headers=False,
+                    access_log=False, lifespan='off', ws='none', timeout_graceful_shutdown=5)
 
 
 if __name__ == '__main__':

@@ -11,6 +11,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).resolve().parents[1] / 'mcp')]
 import service
+from sse_connection import publish_sse_connection
 from management_http import install
 from qmp import SocketReplaced
 from server import ManagedConsoleSessions, local_only
@@ -59,6 +60,47 @@ class ManagedVMTest(unittest.IsolatedAsyncioTestCase):
                                           json={'name': 'overlap', 'segments': ['10.40.0.0/24', '10.40.0.0/25']})
         self.assertEqual(response.status, 400)
         self.assertEqual((await service.vm_inventory())['templates'], [])
+
+    async def test_iso_rename_preserves_references_and_blocks_deletion(self):
+        template = await service.vm_template_save(**self.template)
+        vm = await service.vm_create('Endpoint', template['id'])
+        image_id = self.template['image_id']
+        await service.vm_iso_rename(image_id, 'Installation media')
+        inventory = await service.vm_inventory()
+        self.assertEqual(inventory['images'][0]['name'], 'Installation media')
+        self.assertEqual(inventory['vms'][0]['image_id'], image_id)
+        await service.vm_template_delete(template['id'])
+        with self.assertRaisesRegex(Conflict, 'Endpoint'):
+            await service.vm_iso_delete(image_id)
+        self.assertTrue(self.manager.iso(vm['image_id']).is_file())
+
+    async def test_iso_upload_preserves_existing_files_and_streams_large_payloads(self):
+        url = '/api/images/large.iso/upload'
+        headers = dict(self.origin, **{'Content-Type': 'application/octet-stream'})
+        contents = b'installer' * 250_000
+        response = await self.client.post(url, data=contents, headers=headers)
+        self.assertEqual(response.status, 201)
+        self.assertEqual((self.media / 'large.iso').read_bytes(), contents)
+        response = await self.client.post(url, data=b'replacement', headers=headers)
+        self.assertEqual(response.status, 409)
+        self.assertEqual((self.media / 'large.iso').read_bytes(), contents)
+        self.assertEqual(list(self.media.glob('.iso-upload-*')), [])
+
+    async def test_sse_token_is_only_revealed_on_same_origin_post(self):
+        path = self.media / 'test-token'
+        token = b'local-probe-token-contains-no-secret'
+        path.write_bytes(token)
+        with (patch('sse_connection.SERVICE_STATE', self.media / 'service'),
+              publish_sse_connection('https://127.0.0.1:6084/sse', path, token)):
+            response = await self.client.get('/api/mcp/sse')
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+            self.assertEqual(await response.json(), {'url': 'https://127.0.0.1:6084/sse'})
+            self.assertEqual((await self.client.post('/api/mcp/sse/token')).status, 403)
+            response = await self.client.post('/api/mcp/sse/token', headers=self.origin)
+            self.assertEqual(response.headers['Cache-Control'], 'no-store')
+            self.assertEqual((await response.json())['token'], token.decode())
+            path.write_text('a different token')
+            self.assertEqual((await self.client.post('/api/mcp/sse/token', headers=self.origin)).status, 409)
 
     async def test_running_vm_blocks_topology_changes_and_deletion(self):
         template = await service.vm_template_save(**self.template)

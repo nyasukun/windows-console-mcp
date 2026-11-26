@@ -267,8 +267,8 @@ def catalog(state=None):
     files = {}
     media = PROJECT if state is None else manager.media
     for prefix, directory in [('workspace', media), ('guest-tools', state or STATE)]:
-        for path in sorted(directory.glob('*.iso')):
-            if path.is_file() and not path.is_symlink():
+        for path in sorted(directory.glob('*')):
+            if manager.is_iso(path):
                 files[f'{prefix}/{path.name}'] = path
     return files
 
@@ -638,6 +638,23 @@ manager = VMManager()
 async def vm_inventory() -> dict:
     """List managed VMs with power state, templates, installation ISO IDs and network topologies."""
     return await asyncio.to_thread(manager.overview)
+
+@export_tool
+async def vm_iso_register(source: str) -> dict:
+    """Register an ISO from an explicitly supplied absolute path on the VM host."""
+    return await asyncio.to_thread(manager.register_iso, source)
+
+
+@export_tool
+async def vm_iso_rename(image_id: str, name: str) -> dict:
+    """Change an installation ISO's display name while preserving its ID."""
+    return await asyncio.to_thread(manager.rename_iso, image_id, name)
+
+
+@export_tool
+async def vm_iso_delete(image_id: str) -> dict:
+    """Delete an unused installation ISO file from the host's ISO library."""
+    return await asyncio.to_thread(manager.delete_iso, image_id)
 
 
 @export_tool

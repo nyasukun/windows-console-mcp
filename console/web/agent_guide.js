@@ -1,5 +1,58 @@
 const guide = document.querySelector('#agent-guide');
 const feedback = document.querySelector('#copy-feedback');
+const sseStatus = document.querySelector('#sse-status');
+const sseDetails = document.querySelector('#sse-details');
+const reveal = document.querySelector('#sse-reveal');
+const tokenPanel = document.querySelector('#sse-token-panel');
+const token = document.querySelector('#sse-token');
+let sseRequest;
+
+async function readSSE(revealToken = false) {
+  const signal = sseRequest.signal;
+  try {
+    const response = await fetch('/api/mcp/sse' + (revealToken ? '/token' : ''),
+      {method: revealToken ? 'POST' : 'GET', signal, cache: 'no-store'});
+    const result = await response.json();
+    if (!response.ok) throw Error(result.error || 'SSEサーバーの情報を確認できません。');
+    if (signal.aborted) return;
+    if (revealToken) {
+      token.textContent = result.token;
+      tokenPanel.hidden = false;
+      reveal.textContent = 'トークンを隠す';
+    } else {
+      document.querySelector('#sse-url').textContent = result.url;
+      document.querySelector('#sse-opencode').textContent = JSON.stringify({mcp: {servers: {
+        'windows-console': {type: 'remote', url: result.url, oauth: false,
+          headers: {Authorization: 'Bearer {env:WINDOWS_CONSOLE_MCP_TOKEN}'}}
+      }}}, null, 2);
+      sseDetails.hidden = false;
+    }
+    sseStatus.textContent = '';
+  } catch (error) {
+    if (!signal.aborted) sseStatus.textContent = error.message;
+  } finally {
+    if (!signal.aborted) reveal.disabled = false;
+  }
+}
+
+function hideToken() {
+  token.textContent = '';
+  tokenPanel.hidden = true;
+  reveal.textContent = 'トークンを表示';
+}
+
+reveal.onclick = () => {
+  if (!tokenPanel.hidden) {
+    hideToken();
+    return;
+  }
+  reveal.disabled = true;
+  readSSE(true);
+};
+guide.addEventListener('close', () => {
+  sseRequest?.abort();
+  hideToken();
+});
 
 export function openAgentGuide(vm = {}) {
   const name = typeof vm.name === 'string' ? vm.name.trim() : '';
@@ -19,7 +72,7 @@ export function openAgentGuide(vm = {}) {
     target.textContent = name ? 'VM作成前 · ' + name : 'VM作成前';
     const selection = vm.templateId
       ? 'フォームで選んだ template_id は ' + vm.templateId + '、ネットワーク設定は ' + JSON.stringify(vm.network) + ' です。'
-      : '使えるテンプレートと ISO を示し、使うテンプレートまたは ISO とネットワークを私に確認してください。テンプレートがなければ、確認した ISO とサイズで vm_template_save を使って作成してください。ISO がなければ、ホストの ISO フォルダーへの配置を案内してください。';
+      : '使えるテンプレートと ISO を示し、使うテンプレートまたは ISO とネットワークを私に確認してください。テンプレートがなければ、確認した ISO とサイズで vm_template_save を使って作成してください。ISO がなければ、VM 管理画面の「ISO を登録」を案内してください。ホスト上のファイルの絶対パスを私が指定した場合は、vm_iso_register を使えます。';
     setup.textContent = 'Windows Console MCP で新規 Windows VM を作成したいです。まず vm_inventory で既存 VM、テンプレート、利用可能な ISO を調べてください。\n' +
       (name ? '新規 VM 名は ' + JSON.stringify(name) + ' です。' : 'VM 名は私に確認してください。') + '\n' + selection + '\n' +
       '同名の VM がある場合は新規作成する前に確認してください。構成が決まったら vm_create で作成し、vm_start で起動してください。作成した vm_id を報告し、同じ ID を console_screen に指定してセットアップ画面と次の選択肢を日本語で説明してください。ディスクやアカウントの選択は私の確認を待ってください。';
@@ -27,6 +80,12 @@ export function openAgentGuide(vm = {}) {
   }
   feedback.textContent = '';
   guide.showModal();
+  sseRequest?.abort();
+  sseRequest = new AbortController();
+  hideToken();
+  sseDetails.hidden = true;
+  sseStatus.textContent = '接続先を確認しています。';
+  readSSE();
 }
 
 guide.querySelector('form').addEventListener('submit', () => { feedback.textContent = ''; });

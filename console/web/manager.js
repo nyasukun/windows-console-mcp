@@ -143,7 +143,7 @@ function renderVMs(topologies) {
     } else if (inventory.images.length) {
       onboarding.append(element('p', '最初に、インストール ISO とマシンサイズを選んでテンプレートを作成します。'));
     } else {
-      onboarding.append(element('p', 'ホストの ISO フォルダーにインストール ISO を置き、「更新」を押してください。'));
+      onboarding.append(element('p', '最初にインストール ISO を登録してください。'));
     }
     $('vms').replaceChildren(onboarding);
     return;
@@ -245,24 +245,48 @@ function paintSection(id, state, draw) {
 function render() {
   if (!inventory) return;
   const newVM = $('new-vm');
-  const newLabel = inventory.templates.length ? '＋ VM を作成' : '＋ テンプレートを作成';
+  const newLabel = !inventory.images.length ? '＋ ISO を登録' :
+    inventory.templates.length ? '＋ VM を作成' : '＋ テンプレートを作成';
   if (newVM.textContent !== newLabel) newVM.textContent = newLabel;
-  newVM.disabled = busy || (!inventory.templates.length && !inventory.images.length);
+  newVM.disabled = busy;
   $('new-template').disabled = busy || !inventory.images.length;
   $('new-topology').disabled = busy;
   $('refresh').disabled = busy;
+  const imageNames = new Map(inventory.images.map(image => [image.id, image.name]));
   const topologyNames = inventory.topologies.map(topology => [topology.id, topology.name]);
   paintSection('vms', [inventory.vms, topologyNames, !inventory.vms.length &&
     [!!inventory.templates.length, !!inventory.images.length]], () => renderVMs(new Map(topologyNames)));
-  paintSection('templates', [inventory.templates, !!inventory.images.length], () =>
-    renderCards('templates', inventory.templates, item => [item.image_id, config(item)], openTemplate,
+  paintSection('templates', [inventory.templates, inventory.images], () =>
+    renderCards('templates', inventory.templates, item => [imageNames.get(item.image_id) || item.image_id, config(item)], openTemplate,
     item => operate(`templates/${item.id}`, 'DELETE', {}, {
       confirmation: `テンプレート「${item.name}」を削除しますか？`,
       progress: item.name + ' を削除しています…'
     }),
     inventory.images.length ? 'VM を作成するにはテンプレートを追加してください。' :
-      'インストール ISO をホストの ISO フォルダーに配置し、更新してください。'));
+      '先にインストール ISO を登録してください。'));
+  paintSection('images', inventory.images, renderISOs);
   paintSection('topologies', [inventory.topologies, inventory.vms], renderTopologies);
+}
+
+function renderISOs() {
+  const items = inventory.images.map(image => {
+    const card = element('div', undefined, 'card');
+    const content = element('div');
+    content.append(element('strong', image.name), element('div',
+      image.id + ' · ' + (image.bytes / 1024 ** 3).toFixed(2) + ' GiB', 'meta'));
+    const actions = element('div', undefined, 'actions');
+    const endpoint = 'images/' + encodeURIComponent(image.id);
+    actions.append(action('名前変更', () => dialog('ISO の名前変更', '保存', () => {
+      const name = input('表示名', image.name, {maxLength: 80});
+      return () => ({name: name.value});
+    }, endpoint, 'PUT')), action('削除', () => operate(endpoint, 'DELETE', {}, {
+      confirmation: `「${image.name}」のISOファイルをホストから削除しますか？`,
+      progress: image.name + ' を削除しています…'
+    }), {danger: true}));
+    card.append(content, actions);
+    return card;
+  });
+  $('images').replaceChildren(...(items.length ? items : [empty('登録済みのISOはありません。')]));
 }
 
 function renderTopologies() {
@@ -328,7 +352,7 @@ function dialog(title, button, build, endpoint, method, next) {
 function openTemplate(item, next) {
   dialog(item ? 'テンプレートを編集' : 'テンプレートを追加', '保存', () => {
     const name = input('名前', item?.name || '', {maxLength: 80});
-    const choices = inventory.images.map(image => [image.id, image.id]);
+    const choices = inventory.images.map(image => [image.id, image.name]);
     if (item && !choices.some(([id]) => id === item.image_id)) {
       choices.unshift(['', `${item.image_id}（利用不可）`]);
     }
@@ -341,6 +365,46 @@ function openTemplate(item, next) {
     return () => ({name: name.value, image_id: image.value, vcpus: cpu.valueAsNumber,
       ram_mib: ram.valueAsNumber, disk_gib: disk.valueAsNumber});
   }, item ? `templates/${item.id}` : 'templates', item ? 'PUT' : 'POST', next);
+}
+
+function openISOUpload(next) {
+  if (busy) return;
+  let file, progress;
+  dialog('ISO を登録', '登録', () => {
+    file = input('ISO ファイル', '', {type: 'file', accept: '.iso'});
+    progress = element('progress');
+    progress.max = 100;
+    progress.hidden = true;
+    progress.setAttribute('aria-label', 'ISOのアップロード進捗');
+    fields.append(progress);
+    return () => ({});
+  }, 'images', 'POST', next);
+  submit = () => new Promise((resolve, reject) => {
+    const selected = file.files[0];
+    if (!selected?.size || !/\.iso$/i.test(selected.name)) {
+      reject(Error('空でない .iso ファイルを選択してください。'));
+      return;
+    }
+    const request = new XMLHttpRequest();
+    request.open('POST', '/api/images/' + encodeURIComponent(selected.name) + '/upload');
+    request.setRequestHeader('Content-Type', 'application/octet-stream');
+    progress.hidden = false;
+    progress.value = 0;
+    request.upload.onprogress = event => {
+      if (event.lengthComputable) progress.value = event.loaded / event.total * 100;
+    };
+    request.onload = () => {
+      progress.hidden = true;
+      if (request.status === 201) resolve();
+      else reject(Error(request.response?.error || `ISO登録に失敗しました (HTTP ${request.status})`));
+    };
+    request.onerror = () => {
+      progress.hidden = true;
+      reject(Error('接続が切れました。ISOファイルを再送信してください。'));
+    };
+    request.responseType = 'json';
+    request.send(selected);
+  });
 }
 
 function openTopology(item) {
@@ -408,10 +472,14 @@ function openNetwork(vm) {
   dialog(`${vm.name} の接続先`, '保存', () => networkFields(vm), `vms/${vm.id}/network`, 'PUT');
 }
 
-$('new-vm').onclick = () => {
-  if (inventory.templates.length) openVM();
+function beginVMCreation() {
+  if (!inventory.images.length) openISOUpload(() => { if (inventory.images.length) beginVMCreation(); });
+  else if (inventory.templates.length) openVM();
   else openTemplate(undefined, () => { if (inventory.templates.length) openVM(); });
-};
+}
+
+$('new-vm').onclick = beginVMCreation;
+$('new-iso').onclick = () => openISOUpload();
 $('new-template').onclick = () => openTemplate();
 $('new-topology').onclick = () => openTopology();
 $('agent-start').onclick = () => openAgentGuide();

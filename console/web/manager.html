@@ -43,6 +43,13 @@
         </div>
         <div id="templates"></div>
       </section>
+      <section class="panel management-section" aria-labelledby="iso-heading">
+        <div class="section-heading">
+          <h2 id="iso-heading">ISO 管理</h2>
+          <button type="button" id="new-iso">＋ ISO を登録</button>
+        </div>
+        <div id="images"></div>
+      </section>
     </fieldset>
   </main>
   <dialog id="editor" aria-labelledby="form-title">
@@ -70,6 +77,28 @@
     </section>
     <section>
       <h3>MCPを接続する</h3>
+      <details id="sse-guide" open>
+        <summary>SSE 接続</summary>
+        <p id="sse-status" aria-live="polite">接続先を確認しています。</p>
+        <div id="sse-details" hidden>
+          <p>接続先 URL</p>
+          <pre id="sse-url"></pre>
+          <button type="button" data-copy="sse-url">SSE URLをコピー</button>
+          <button id="sse-reveal" type="button">トークンを表示</button>
+          <div id="sse-token-panel" hidden>
+            <p>Bearerトークン</p>
+            <pre id="sse-token"></pre>
+            <button type="button" data-copy="sse-token">トークンをコピー</button>
+          </div>
+          <p>MCPクライアントで SSE を選択し、上の URL と <code>Authorization: Bearer &lt;トークン&gt;</code> を設定します。クライアント側でサーバー証明書を信頼してください。</p>
+          <details>
+            <summary>OpenCode の SSE 設定</summary>
+            <p>SSEに対応するOpenCodeで、クライアントの環境変数 <code>WINDOWS_CONSOLE_MCP_TOKEN</code> にトークンを設定します。</p>
+            <pre id="sse-opencode"></pre>
+            <button type="button" data-copy="sse-opencode">OpenCodeのSSE設定をコピー</button>
+          </details>
+        </div>
+      </details>
       <details>
         <summary>OpenCode</summary>
         <p>VMホストのリポジトリ直下で OpenCode を開きます。同梱の <code>opencode.json</code> が接続を登録します。<code>opencode mcp list</code> で <code>windows-console</code> が接続済みか確認してください。</p>
