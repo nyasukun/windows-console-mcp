@@ -18,6 +18,8 @@ systemctl --user stop windows-html-console.service
 systemctl --user stop windows-console-mcp-sse.service
 ```
 
+LAN SSE を端末から起動している場合は、その端末で Ctrl+C を押します。再開時は、更新後のチェックアウトから同じ起動オプションを使います。systemd のユニット名を変更している場合は、以下の手順でも実際の名前を使ってください。
+
 ## 2. バックアップする
 
 既定の保存先を使用している場合の例です。バックアップ先には VM ディスクと転送済みファイルを保存できる空き容量を確保します。環境変数で保存場所を変更している場合は、その実体をバックアップに含めます。
@@ -94,6 +96,8 @@ for dir in state-managed state-console state-clean; do
 done
 printf '復元前の退避先 %s\n' "$retired"
 systemctl --user start windows-html-console.service
+# LAN SSE サービスを利用している環境だけ
+systemctl --user start windows-console-mcp-sse.service
 ```
 
 カスタムの保存先を使う環境では、退避と復元のパスをその保存先に合わせます。Unix ソケットはサービスや VM が起動時に作り直します。
