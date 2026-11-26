@@ -12,6 +12,8 @@ git log --oneline HEAD..origin/main
 
 ローカル変更があれば内容を確認して、別コミットなどに保存します。VM 管理画面で実行中のファイル転送を完了させ、稼働している VM を通常停止します。VM 一覧ですべて停止したことを確認してから、Web と、LAN SSE を設定している場合はその MCP サービスも停止します。
 
+管理画面の通常停止に失敗した場合は、コンソールから Windows のシャットダウンを試します。Windows やコンソールが応答しない場合に強制停止が必要なら、管理画面の「強制停止」で仮想ディスクを保持できます。
+
 ```sh
 systemctl --user stop windows-html-console.service
 # LAN SSE サービスを利用している環境だけ

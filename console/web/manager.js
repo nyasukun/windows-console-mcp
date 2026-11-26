@@ -88,6 +88,13 @@ function clearRecovery() {
   $('recovery').hidden = true;
 }
 
+function forceStop(vm) {
+  return operate(`vms/${vm.id}/stop`, 'POST', {force: true}, {
+    confirmation: `「${vm.name}」の電源を強制的に切りますか？保存していないデータは失われます。`,
+    progress: vm.name + ' を強制停止しています…', vmId: vm.id
+  });
+}
+
 function forceDelete(vm) {
   return operate(`vms/${vm.id}`, 'DELETE', {force: true}, {
     confirmation: `「${vm.name}」の電源を強制的に切り、VMと仮想ディスクを完全に削除します。この操作は元に戻せません。削除しますか？`,
@@ -99,7 +106,8 @@ function offerRecovery(vm) {
   const current = inventory.vms.find(item => item.id === vm.id);
   if (!current || stopped.has(current.status)) return;
   const recovery = $('recovery');
-  recovery.append(element('span', '終了を待てない場合は、対象VMを強制停止して削除できます。'),
+  recovery.append(element('span', '終了を待てない場合は、強制停止するか、仮想ディスクごと削除できます。'),
+    action('強制停止', () => forceStop(current), {danger: true}),
     action('強制停止して削除', () => forceDelete(current), {danger: true}));
   recovery.hidden = false;
 }
@@ -167,7 +175,7 @@ function renderVMs(topologies) {
     if (vm.status === 'running') {
       const consoleLink = element('a', 'コンソール');
       consoleLink.href = `/vms/${vm.id}/console/`;
-      actions.append(consoleLink, action('停止', () => operate(path + '/stop', 'POST', {timeout_seconds: 15}, {
+      actions.append(consoleLink, action('停止', () => operate(path + '/stop', 'POST', {}, {
         progress: vm.name + ' の Windows の終了を待っています…', vmId: vm.id, onError: () => offerRecovery(vm)
       })));
     }
@@ -178,10 +186,7 @@ function renderVMs(topologies) {
       menu.append(toggle);
       if (['running', 'paused', 'restarting'].includes(vm.status)) menu.append(action('強制停止', () => {
         menu.open = false;
-        operate(path + '/stop', 'POST', {force: true}, {
-          confirmation: `「${vm.name}」の電源を強制的に切りますか？保存していないデータは失われます。`,
-          progress: vm.name + ' を強制停止しています…', vmId: vm.id
-        });
+        forceStop(vm);
       }, {danger: true}));
       menu.append(action('強制停止して削除', () => {
         menu.open = false;

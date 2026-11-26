@@ -234,6 +234,7 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
             status=409, json={'error': 'Windowsの終了を確認できません'}))
         await row.get_by_role('button', name='停止', exact=True).click()
         await expect(page.locator('#message')).to_have_text('Windowsの終了を確認できません')
+        await expect(page.locator('#recovery').get_by_role('button', name='強制停止', exact=True)).to_be_visible()
         recovery = page.locator('#recovery').get_by_role('button', name='強制停止して削除')
         self.assertEqual((await self.call('vm_inventory'))['vms'][0]['status'], 'running')
         await recovery.click()
