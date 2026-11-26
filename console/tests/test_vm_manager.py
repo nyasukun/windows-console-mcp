@@ -14,7 +14,7 @@ import service
 from management_http import install
 from qmp import SocketReplaced
 from server import ManagedConsoleSessions, local_only
-from vm_manager import VMManager
+from vm_manager import Conflict, VMManager
 
 
 class ManagedVMTest(unittest.IsolatedAsyncioTestCase):
@@ -145,6 +145,30 @@ class ManagedVMTest(unittest.IsolatedAsyncioTestCase):
               patch.object(self.manager, 'wait_container')):
             self.manager.ensure_router(topology, dict(statuses, **{name: 'running'}), [vm])
         docker.assert_not_called()
+
+    async def test_offline_network_cleanup_preserves_inventory_and_disk(self):
+        topology = await service.vm_topology_save('Network', ['10.45.0.0/24'], proxy=True)
+        template = await service.vm_template_save(**self.template)
+        vm = await service.vm_create('Guest', template['id'], topology['id'], '10.45.0.0/24')
+        router = self.manager.name('router', topology['id'])
+        proxy = self.manager.name('proxy', topology['id'])
+        name = self.manager.name('vm', vm['id'])
+        disk = self.manager.vm_dir(vm['id']) / 'disk.qcow2'
+        disk.parent.mkdir(parents=True)
+        disk.touch()
+        inventory = self.manager.read()
+        with patch.object(self.manager, 'docker') as docker:
+            self.statuses.return_value = {name: 'running', proxy: 'running', router: 'running'}
+            with self.assertRaises(Conflict):
+                self.manager.stop_network_containers()
+            docker.assert_not_called()
+            self.statuses.return_value[name] = 'exited'
+            self.manager.stop_network_containers()
+        self.assertEqual([call.args for call in docker.call_args_list],
+                         [('container', 'rm', name), ('container', 'rm', '-f', proxy),
+                          ('container', 'rm', '-f', router)])
+        self.assertTrue(disk.exists())
+        self.assertEqual(self.manager.read(), inventory)
 
     async def test_console_session_tracks_rebound_monitor_socket(self):
         template = await service.vm_template_save(**self.template)

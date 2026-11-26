@@ -329,6 +329,19 @@ class VMManager:
             if name in statuses:
                 self.docker('container', 'rm', '-f', name)
 
+    def stop_network_containers(self):
+        """Discard this inventory's network runtime so it can be rebuilt after rollback."""
+        with self.edit() as inv:
+            statuses = self.statuses()
+            members = [self.vm_container(vm) for vm in inv['vms'].values() if vm.get('topology_id')]
+            for name in members:
+                self.require_stopped(name, statuses)
+            for name in members:
+                if name in statuses:
+                    self.docker('container', 'rm', name)
+            for topology_id in inv['topologies']:
+                self.remove_topology(topology_id, statuses)
+
     def require_stopped(self, name, statuses):
         if statuses.get(name) not in STOPPED:
             raise Conflict('先にVMを停止してください')

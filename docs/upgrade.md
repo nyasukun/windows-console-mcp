@@ -69,6 +69,7 @@ systemctl --user status windows-html-console.service
 更新後に VM を起動した場合は再度通常停止し、Web と LAN SSE を停止します。`backup` が別端末に引き継がれていない場合は、最初に手順2で表示されたバックアップの絶対パスを設定してください。
 
 ```sh
+uv run --locked --project console/mcp python console/maintenance.py stop-network-containers
 git switch --detach "$(cat "$backup/revision")"
 docker image tag "$(cat "$backup/image")" windows-console-mcp:local
 uv sync --locked --project console/mcp
@@ -77,7 +78,7 @@ systemctl --user start windows-html-console.service
 systemctl --user start windows-console-mcp-sse.service
 ```
 
-VM 一覧とコンソールを再確認します。コードとイメージを戻しただけなら、更新後にゲスト内で行った作業もディスクに残ります。復旧後に追跡ブランチへ戻るときは `git switch main` を使用します。
+停止したルーターとプロキシは次回の VM 起動時に戻したイメージから作られます。VM 一覧とコンソールを再確認します。コードとイメージを戻しただけなら、更新後にゲスト内で行った作業もディスクに残ります。復旧後に追跡ブランチへ戻るときは `git switch main` を使用します。
 
 ### 状態ファイルも復元する場合
 
