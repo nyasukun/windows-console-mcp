@@ -109,6 +109,9 @@ class ClipboardControl(unittest.IsolatedAsyncioTestCase):
 
 
 class MediaSelection(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.enterContext(patch.object(service.manager, 'read', return_value={'vms': {}}))
+
     async def test_failed_live_change_restores_previous_selection(self):
         with tempfile.TemporaryDirectory() as temp:
             project = Path(temp)
@@ -127,6 +130,9 @@ class MediaSelection(unittest.IsolatedAsyncioTestCase):
 
 
 class InternetSettings(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.enterContext(patch.object(service.manager, 'read', return_value={'vms': {}}))
+
     async def test_save_then_apply_only_when_needed(self):
         with tempfile.TemporaryDirectory() as temp:
             state = Path(temp)

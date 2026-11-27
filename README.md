@@ -10,6 +10,7 @@ Ubuntu 上の Windows x64 VM を、SSH ポートフォワードした Chrome と
 ## ガイド
 
 - [インストールと最初の Windows VM](docs/install.md)
+- [Chrome・LinuxコンテナとトポロジーDNS](docs/containers.md)
 - [アップグレード、バックアップ、復旧](docs/upgrade.md)
 - [MCP 操作とブラウザコンソール](console/README.md)
 

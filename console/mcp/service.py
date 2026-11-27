@@ -21,6 +21,7 @@ from live import install as install_live_stream
 from control_config import CONTROL, LEGACY_CONTROL, KEYS, ROOT, SERVICE_STATE, STATE, configured_port, legacy_lock, store_port, validate_port
 from setup_media import build_setup_iso
 from vm_manager import VMManager
+import endpoint_access
 
 VM = os.environ.get('WINDOWS_CONSOLE_VM', 'windows11-vm-clean')
 UNIT = 'windows-html-console.service'
@@ -636,7 +637,7 @@ manager = VMManager()
 
 @export_tool
 async def vm_inventory() -> dict:
-    """List managed VMs with power state, templates, installation ISO IDs and network topologies."""
+    """List Windows VMs, Chrome/Linux containers, templates, installation ISO IDs and network topologies."""
     return await asyncio.to_thread(manager.overview)
 
 @export_tool
@@ -710,8 +711,94 @@ async def vm_topology_save(name: str, segments: list[str], proxy: bool = False,
 
 @export_tool
 async def vm_topology_delete(topology_id: str) -> dict:
-    """Delete a topology after disconnecting its VMs, and remove its router and proxy containers."""
+    """Delete a topology after disconnecting its VMs and containers."""
     return await asyncio.to_thread(manager.delete_topology, topology_id)
+
+
+@export_tool
+async def vm_topology_dns_save(topology_id: str, records: list[dict[str, str]] | None) -> dict:
+    """Configure A records ({name, address}) for a topology. Use null to disable its DNS service."""
+    return await asyncio.to_thread(manager.set_topology_dns, topology_id, records)
+
+
+@export_tool
+async def vm_topology_power(topology_id: str, running: bool) -> dict:
+    """Start or stop the topology's router, DNS and optional transparent proxy."""
+    return await asyncio.to_thread(manager.power_topology, topology_id, running)
+
+
+@export_tool
+async def container_create(name: str, kind: Literal['browser', 'linux'],
+                           topology_id: str | None = None, segment: str | None = None) -> dict:
+    """Create a Chrome or Linux container entry, optionally connected to a topology CIDR."""
+    return await asyncio.to_thread(manager.create_endpoint, name, kind, topology_id, segment)
+
+
+@export_tool
+async def container_set_network(endpoint_id: str, topology_id: str | None = None,
+                                segment: str | None = None) -> dict:
+    """Move a stopped Chrome or Linux container to a segment, or disconnect it."""
+    return await asyncio.to_thread(manager.set_endpoint_network, endpoint_id, topology_id, segment)
+
+
+@export_tool
+async def container_start(endpoint_id: str) -> dict:
+    """Start a Chrome or Linux container by its ID from vm_inventory."""
+    return await asyncio.to_thread(manager.start_endpoint, endpoint_id)
+
+
+@export_tool
+async def container_stop(endpoint_id: str) -> dict:
+    """Stop a Chrome or Linux container while retaining its data."""
+    return await asyncio.to_thread(manager.stop_endpoint, endpoint_id)
+
+
+@export_tool
+async def container_delete(endpoint_id: str) -> dict:
+    """Permanently delete a stopped Chrome or Linux container and its data."""
+    return await asyncio.to_thread(manager.delete_endpoint, endpoint_id)
+
+
+@export_tool
+async def browser_tabs(endpoint_id: str) -> list[dict]:
+    """List the IDs, URLs and titles of the Chrome tabs."""
+    return await endpoint_access.tabs(manager, endpoint_id)
+
+
+@export_tool
+async def browser_new_tab(endpoint_id: str, url: str = 'about:blank') -> dict:
+    """Open a new Chrome tab, optionally at an HTTP or HTTPS URL."""
+    return await endpoint_access.new_tab(manager, endpoint_id, url)
+
+
+@export_tool
+async def browser_close_tab(endpoint_id: str, tab_id: str) -> dict:
+    """Close a Chrome tab."""
+    return await endpoint_access.close_tab(manager, endpoint_id, tab_id)
+
+
+@export_tool
+async def browser_navigate(endpoint_id: str, tab_id: str, url: str) -> dict:
+    """Navigate a Chrome tab to an HTTP or HTTPS URL."""
+    return await endpoint_access.navigate(manager, endpoint_id, tab_id, url)
+
+
+@export_tool
+async def browser_screen(endpoint_id: str, tab_id: str) -> Image:
+    """Capture the Chrome tab as a PNG."""
+    return Image(data=await endpoint_access.capture(manager, endpoint_id, tab_id), format='png')
+
+
+@export_tool
+async def browser_input(endpoint_id: str, tab_id: str, event: dict) -> dict:
+    """Send text ({type: text, text}), mouse or keyboard input to a Chrome tab."""
+    return await endpoint_access.send_input(manager, endpoint_id, tab_id, event)
+
+
+@export_tool
+async def linux_exec(endpoint_id: str, command: str, timeout: int = 30) -> dict:
+    """Execute a command over SSH in the managed Linux container and return stdout, stderr and exit status."""
+    return await endpoint_access.linux_exec(manager, endpoint_id, command, timeout)
 
 
 def stream_target(vm_id):

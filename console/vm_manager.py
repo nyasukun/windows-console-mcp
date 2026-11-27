@@ -18,7 +18,9 @@ from contextlib import contextmanager, nullcontext, suppress
 from pathlib import Path
 
 import legacy_vm
+import endpoint_runtime
 from control_config import ROOT, STATE, legacy_lock
+from network.addressing import reserved_addresses
 from qmp import Monitor
 from setup_media import build_setup_iso
 from transfer_http import install_relay
@@ -27,6 +29,7 @@ PROJECT = ROOT.parent
 PRIVATE_NETWORKS = [ipaddress.IPv4Network(cidr) for cidr in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16')]
 VM_ID = r'[0-9a-f]{12}'
 STOPPED = (None, 'created', 'exited', 'dead')
+DNS_UNSET = object()
 
 
 class Conflict(RuntimeError):
@@ -61,6 +64,32 @@ def topology_settings(segments, proxy):
     return {'segments': [str(n) for n in networks], 'proxy': proxy}
 
 
+def dns_records(records, segments):
+    if records is None:
+        return None
+    if not isinstance(records, list) or len(records) > 128:
+        raise ValueError('DNSレコードは128件まで指定できます')
+    networks = [ipaddress.IPv4Network(segment) for segment in segments]
+    names = set()
+    result = []
+    for record in records:
+        if (not isinstance(record, dict) or set(record) != {'name', 'address'}
+                or not all(isinstance(value, str) for value in record.values())):
+            raise ValueError('DNSレコードには名前とIPv4アドレスを指定してください')
+        name = record['name'].strip().rstrip('.').lower()
+        labels = name.split('.')
+        if (len(name) > 253 or len(labels) < 2 or
+                any(not re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label) for label in labels)
+                or name in names):
+            raise ValueError('DNS名は重複のない完全修飾ドメイン名を指定してください')
+        address = ipaddress.IPv4Address(record['address'])
+        if not any(network[1] < address < network[-1] for network in networks):
+            raise ValueError('DNSのIPv4アドレスはトポロジーのセグメント内を指定してください')
+        names.add(name)
+        result.append({'name': name, 'address': str(address)})
+    return result
+
+
 def bind_mount(source, target, readonly=False):
     out = io.StringIO()
     values = ['type=bind', f'source={source}', f'target={target}']
@@ -83,9 +112,11 @@ class VMManager:
 
     def read(self):
         try:
-            return json.loads(self.file.read_text())
+            inventory = json.loads(self.file.read_text())
         except FileNotFoundError:
-            return {key: {} for key in ('templates', 'vms', 'topologies')}
+            inventory = {key: {} for key in ('templates', 'vms', 'topologies')}
+        inventory.setdefault('endpoints', {})
+        return inventory
 
     def save(self, inventory):
         with tempfile.NamedTemporaryFile('w', dir=self.state, delete=False) as file:
@@ -312,8 +343,13 @@ class VMManager:
         topologies = []
         for topology_id, topology in inventory['topologies'].items():
             topologies.append(dict(topology, router_status=container_status('router', topology_id),
-                                   proxy_status=container_status('proxy', topology_id) if topology['proxy'] else None))
+                                   proxy_status=container_status('proxy', topology_id) if topology['proxy'] else None,
+                                   dns_status=container_status('dns', topology_id)
+                                   if topology.get('dns') is not None else None))
+        endpoints = [dict(item, status=container_status('endpoint', item['id']))
+                     for item in inventory['endpoints'].values()]
         return {'templates': list(inventory['templates'].values()), 'vms': vms,
+                'endpoints': endpoints,
                 'topologies': topologies, 'images': self.images(),
                 'docker_error': error}
 
@@ -377,37 +413,194 @@ class VMManager:
                 self.save(inv)
             return dict(vm, status='stopped')
 
-    def save_topology(self, name, segments, proxy=False, topology_id=None):
+    def endpoint_name(self, endpoint_id):
+        return self.name('endpoint', endpoint_id)
+
+    def endpoint_dir(self, endpoint_id):
+        if not isinstance(endpoint_id, str) or not re.fullmatch(VM_ID, endpoint_id):
+            raise ValueError('無効なコンテナIDです')
+        return self.state / 'e' / endpoint_id
+
+    def endpoint(self, endpoint_id, kind=None):
+        self.endpoint_dir(endpoint_id)
+        item = self.read()['endpoints'].get(endpoint_id)
+        if item is None or kind and item['kind'] != kind:
+            raise ValueError('一覧から対象のコンテナを指定してください')
+        return item
+
+    def endpoint_attachment(self, inv, topology_id, segment, exclude=None):
+        attachment = self.attachment(inv, topology_id, segment)
+        if not topology_id:
+            return dict(attachment, address=None)
+        allocated = {item['address'] for item in inv['endpoints'].values()
+                     if item['id'] != exclude and item['topology_id'] == topology_id and item['segment'] == segment}
+        for address in reserved_addresses(ipaddress.IPv4Network(segment)):
+            if str(address) not in allocated:
+                return dict(attachment, address=str(address))
+        raise Conflict('このセグメントにコンテナ用の空きIPアドレスがありません')
+
+    def create_endpoint(self, name, kind, topology_id=None, segment=None):
+        if kind not in ('browser', 'linux'):
+            raise ValueError('コンテナの種類を指定してください')
+        with self.edit() as inv:
+            ident = uuid.uuid4().hex[:12]
+            item = dict(id=ident, name=named(name), kind=kind,
+                        **self.endpoint_attachment(inv, topology_id, segment))
+            inv['endpoints'][ident] = item
+            self.save(inv)
+            return dict(item, status='stopped')
+
+    def require_endpoint_unreferenced(self, inv, item):
+        topology = inv['topologies'].get(item['topology_id'], {})
+        names = [record['name'] for record in topology.get('dns') or []
+                 if record['address'] == item['address']]
+        if names:
+            raise Conflict('先にコンテナを参照するDNSレコードを変更してください · ' + '、'.join(names))
+
+    def set_endpoint_network(self, endpoint_id, topology_id=None, segment=None):
+        with self.edit() as inv:
+            item = inv['endpoints'][endpoint_id]
+            self.require_stopped(self.endpoint_name(endpoint_id), self.statuses())
+            if (topology_id, segment) != (item['topology_id'], item['segment']):
+                self.require_endpoint_unreferenced(inv, item)
+                item.update(self.endpoint_attachment(inv, topology_id, segment, endpoint_id))
+                self.save(inv)
+            return dict(item, status='stopped')
+
+    def start_endpoint(self, endpoint_id):
+        directory = self.endpoint_dir(endpoint_id)
+        name = self.endpoint_name(endpoint_id)
+        socket_path = directory / 'socket' / 'service.sock'
+        if len(os.fsencode(socket_path)) > 107:
+            raise ValueError('コンテナの保存先パスが長すぎます')
+        with self.edit() as inv:
+            item = inv['endpoints'][endpoint_id]
+            statuses = self.statuses()
+            if statuses.get(name) == 'running':
+                return dict(item, status='running')
+            self.require_stopped(name, statuses)
+            for part in ('home', 'socket'):
+                (directory / part).mkdir(mode=0o700, parents=True, exist_ok=True)
+            topology = inv['topologies'].get(item['topology_id'])
+            router = self.ensure_router(topology, statuses, self.network_members(inv, topology['id'])) if topology else None
+            resolv = directory / 'resolv.conf'
+            # Keep the bind-mounted file's inode when a stopped endpoint moves.
+            resolv.write_text(f"nameserver {ipaddress.IPv4Network(item['segment'])[1]}\n"
+                              if topology else '')
+            socket_path.unlink(missing_ok=True)
+            if name not in statuses or statuses[name] == 'dead':
+                if name in statuses:
+                    self.docker('container', 'rm', name)
+                endpoint_runtime.create_container(self, item, directory)
+            self.docker('container', 'start', name)
+            try:
+                if topology:
+                    endpoint_runtime.attach(self, item, topology, router)
+                self.wait_container(name, lambda: endpoint_runtime.service_ready(socket_path, item['kind']), 20)
+            except BaseException:
+                with suppress(RuntimeError, OSError, subprocess.TimeoutExpired):
+                    self.docker('container', 'stop', '--time', '2', name)
+                raise
+            return dict(item, status='running')
+
+    def stop_endpoint(self, endpoint_id):
+        with self.edit() as inv:
+            item = inv['endpoints'][endpoint_id]
+            name = self.endpoint_name(endpoint_id)
+            status = self.statuses().get(name)
+            if status == 'paused':
+                self.docker('container', 'unpause', name)
+            if status not in STOPPED:
+                self.docker('container', 'stop', '--time', '10', name)
+                self.wait_stopped(name, 10)
+            return dict(item, status='stopped')
+
+    def delete_endpoint(self, endpoint_id):
+        directory = self.endpoint_dir(endpoint_id)
+        with self.edit() as inv:
+            item = inv['endpoints'][endpoint_id]
+            self.require_endpoint_unreferenced(inv, item)
+            name = self.endpoint_name(endpoint_id)
+            statuses = self.statuses()
+            self.require_stopped(name, statuses)
+            if name in statuses:
+                self.docker('container', 'rm', name)
+            if directory.exists():
+                # Linux may have created root-owned paths inside the bind-mounted home.
+                home = directory / 'home'
+                if item['kind'] == 'linux' and home.exists():
+                    self.docker('run', '--rm', '--network', 'none', '--security-opt', 'no-new-privileges',
+                                '--mount', bind_mount(home, '/endpoint-home'), self.image,
+                                'find', '/endpoint-home', '-mindepth', '1', '-delete')
+                shutil.rmtree(directory)
+            del inv['endpoints'][endpoint_id]
+            self.save(inv)
+            return {'deleted': endpoint_id}
+
+    def network_members(self, inv, topology_id):
+        return [item for kind in ('vms', 'endpoints') for item in inv[kind].values()
+                if item.get('topology_id') == topology_id]
+
+    def member_name(self, item):
+        return self.endpoint_name(item['id']) if 'kind' in item else self.vm_container(item)
+
+    def save_topology(self, name, segments, proxy=False, topology_id=None, dns=DNS_UNSET):
         settings = topology_settings(segments, proxy)
         name = named(name)
         with self.edit() as inv:
-            if topology_id is not None:
-                previous = inv['topologies'][topology_id]
-                if any(previous[key] != value for key, value in settings.items()):
-                    members = [vm for vm in inv['vms'].values() if vm['topology_id'] == topology_id]
-                    if any(vm['segment'] not in settings['segments'] for vm in members):
-                        raise Conflict('使用中のセグメントから先にVMを移動してください')
-                    statuses = self.statuses()
-                    for vm in members:
-                        self.require_stopped(self.vm_container(vm), statuses)
-                    self.remove_topology(topology_id, statuses)
-            ident = topology_id or uuid.uuid4().hex[:12]
-            topology = inv['topologies'][ident] = dict(id=ident, name=name, **settings)
-            self.save(inv)
-            return topology
+            return self.apply_topology(inv, topology_id, name, settings, dns)
+
+    def apply_topology(self, inv, topology_id, name, settings, dns):
+        previous = inv['topologies'][topology_id] if topology_id is not None else {}
+        records = dns_records(previous.get('dns') if dns is DNS_UNSET else dns, settings['segments'])
+        if records is not None:
+            settings['dns'] = records
+        if topology_id is not None and any(previous.get(key) != settings.get(key) for key in ('segments', 'proxy', 'dns')):
+            members = self.network_members(inv, topology_id)
+            if any(item['segment'] not in settings['segments'] for item in members):
+                raise Conflict('使用中のセグメントから先にVMまたはコンテナを移動してください')
+            statuses = self.statuses()
+            for item in members:
+                self.require_stopped(self.member_name(item), statuses)
+            self.remove_topology(topology_id, statuses)
+        ident = topology_id or uuid.uuid4().hex[:12]
+        topology = inv['topologies'][ident] = dict(id=ident, name=name, **settings)
+        self.save(inv)
+        return topology
+
+    def set_topology_dns(self, topology_id, records):
+        with self.edit() as inv:
+            item = inv['topologies'][topology_id]
+            settings = {'segments': item['segments'], 'proxy': item['proxy']}
+            return self.apply_topology(inv, topology_id, item['name'], settings, records)
+
+    def power_topology(self, topology_id, running):
+        if type(running) is not bool:
+            raise ValueError('起動するかどうかを指定してください')
+        with self.edit() as inv:
+            topology = inv['topologies'][topology_id]
+            statuses = self.statuses()
+            members = self.network_members(inv, topology_id)
+            if running:
+                self.ensure_router(topology, statuses, members)
+            else:
+                for item in members:
+                    self.require_stopped(self.member_name(item), statuses)
+                self.remove_topology(topology_id, statuses)
+            return {'id': topology_id, 'running': running}
 
     def delete_topology(self, topology_id):
         with self.edit() as inv:
             inv['topologies'][topology_id]
-            if any(vm['topology_id'] == topology_id for vm in inv['vms'].values()):
-                raise Conflict('トポロジに接続中のVMがあります')
+            if self.network_members(inv, topology_id):
+                raise Conflict('トポロジに接続中のVMまたはコンテナがあります')
             self.remove_topology(topology_id, self.statuses())
             del inv['topologies'][topology_id]
             self.save(inv)
         return {'deleted': topology_id}
 
     def remove_topology(self, ident, statuses):
-        for kind in ('proxy', 'router'):
+        for kind in ('dns', 'proxy', 'router'):
             name = self.name(kind, ident)
             if name in statuses:
                 self.docker('container', 'rm', '-f', name)
@@ -416,10 +609,10 @@ class VMManager:
         """Discard this inventory's network runtime so it can be rebuilt after rollback."""
         with self.edit() as inv:
             statuses = self.statuses()
-            members = [self.vm_container(vm) for vm in inv['vms'].values() if vm.get('topology_id')]
-            for name in members:
-                self.require_stopped(name, statuses)
-            for name in members:
+            members = [item for topology_id in inv['topologies'] for item in self.network_members(inv, topology_id)]
+            for item in members:
+                self.require_stopped(self.member_name(item), statuses)
+            for name in [self.vm_container(item) for item in members if 'kind' not in item]:
                 if name in statuses:
                     self.docker('container', 'rm', name)
             for topology_id in inv['topologies']:
@@ -444,19 +637,19 @@ class VMManager:
         ident = topology['id']
         router = self.name('router', ident)
         proxy = self.name('proxy', ident)
-        containers = [self.vm_container(vm) for vm in members]
+        containers = [self.member_name(vm) for vm in members]
         inactive = all(statuses.get(name) in STOPPED for name in containers)
         replace = statuses.get(router) != 'running'
         if not replace and inactive:
             desired = self.docker('image', 'inspect', '--format', '{{.Id}}', self.image)
             replace = any(
                 self.docker('container', 'inspect', '--format', '{{.Image}}', name) != desired
-                for name in (router, proxy) if statuses.get(name) == 'running'
+                for name in (router, proxy, self.name('dns', ident)) if statuses.get(name) == 'running'
             )
         if replace:
             for name in containers:
                 self.require_stopped(name, statuses)
-            for name in containers:
+            for name in [self.vm_container(item) for item in members if 'kind' not in item]:
                 if name in statuses:
                     self.docker('container', 'rm', name)
             self.remove_topology(ident, statuses)
@@ -472,6 +665,25 @@ class VMManager:
             statuses = self.statuses()
         self.wait_container(router, lambda: self.docker('exec', router, 'cat',
                             '/proc/1/comm') == 'dnsmasq', 15)
+        if topology.get('dns') is not None or any('kind' in item for item in members):
+            compatibility = self.docker('container', 'inspect', '--format',
+                                        '{{index .Config.Labels "windows-console.endpoint-network"}}', router)
+            if compatibility != '1':
+                raise Conflict('コンテナとDNSには新しいルーターが必要です。管理イメージを更新し、'
+                               '接続中のVM・コンテナをすべて停止してからネットワークを再起動してください。')
+        if topology.get('dns') is not None:
+            dns = self.name('dns', ident)
+            if statuses.get(dns) != 'running':
+                if dns in statuses:
+                    self.docker('container', 'rm', dns)
+                flags = ['--server=1.1.1.1', '--server=9.9.9.9'] if topology['proxy'] else []
+                flags += [f"--host-record={record['name']},{record['address']}" for record in topology['dns']]
+                self.docker('run', '-d', '--name', dns, '--label', self.label,
+                            '--network', 'container:' + router, '--cap-drop', 'ALL',
+                            '--security-opt', 'no-new-privileges', '--user', '65534:65534', self.image,
+                            'dnsmasq', '--keep-in-foreground', '--no-resolv', '--bind-interfaces',
+                            '--listen-address=127.0.0.1', '--port=5353', '--log-facility=-', *flags)
+            self.wait_container(dns, lambda: self.docker('exec', dns, 'cat', '/proc/1/comm') == 'dnsmasq', 10)
         if topology['proxy']:
             if statuses.get(proxy) != 'running':
                 if proxy in statuses:
@@ -564,7 +776,7 @@ class VMManager:
             network = ['--network', 'bridge' if nat else 'none']
             if vm['topology_id'] is not None:
                 topology = inv['topologies'][vm['topology_id']]
-                members = [item for item in inv['vms'].values() if item['topology_id'] == topology['id']]
+                members = self.network_members(inv, topology['id'])
                 router = self.ensure_router(topology, statuses, members)
                 tap = 'vm' + vm_id
                 bridge = f"lan{topology['segments'].index(vm['segment'])}"

@@ -59,9 +59,17 @@ export function openAgentGuide(vm = {}) {
   const setup = document.querySelector('#prompt-setup');
   const copySetup = document.querySelector('#copy-setup');
   const target = document.querySelector('#agent-target');
-  document.querySelector('#agent-operate').hidden = !vm.id;
+  document.querySelector('#agent-operate').hidden = !vm.id || !!vm.kind;
   document.querySelector('#iso-acquisition').hidden = Boolean(vm.id);
-  if (vm.id) {
+  if (vm.kind) {
+    target.textContent = [name, vm.id].filter(Boolean).join(' · ');
+    const operation = vm.kind === 'browser'
+      ? 'browser_tabs でタブ一覧を調べ、私が指定したタブの画面は browser_screen で確認してください。'
+      : 'linux_exec で uname -a を実行し、SSH接続とLinuxの状態を確認してください。';
+    setup.textContent = 'Windows Console MCP で対象のコンテナを操作してください。endpoint_id は ' + vm.id + ' です。\n' +
+      'vm_inventory で状態を調べ、停止中なら container_start で起動してください。' + operation;
+    copySetup.textContent = '起動・接続確認の指示をコピー';
+  } else if (vm.id) {
     const prompt = 'Windows Console MCP のツールで操作してください。対象の vm_id は ' + vm.id + ' です。\n';
     target.textContent = [name, vm.id].filter(Boolean).join(' · ');
     setup.textContent = prompt +

@@ -21,13 +21,14 @@ function upstream(state) {
 export function topologyGraph(inventory, ui) {
   const view = document.createDocumentFragment();
   if (!inventory.topologies.length) {
-    view.append(element('p', 'セグメントを追加して、複数の VM をルーターに接続できます。', 'empty'));
+    view.append(element('p', 'セグメントを作り、VMやコンテナを同じネットワークに接続できます。', 'empty'));
     return view;
   }
 
   const connections = new Map();
   const detached = [];
-  for (const vm of inventory.vms) {
+  const devices = [...inventory.vms, ...(inventory.endpoints || [])];
+  for (const vm of devices) {
     if (vm.legacy_container) continue;
     if (!vm.topology_id) {
       detached.push(vm);
@@ -49,6 +50,8 @@ export function topologyGraph(inventory, ui) {
       };
     }
     node.append(element('strong', vm.name), ui.state(vm));
+    if (vm.kind) node.append(element('span', [vm.kind === 'browser' ? 'Chrome' : 'Linux', vm.address]
+      .filter(Boolean).join(' · '), 'meta'));
     if (changeable) {
       const button = ui.button('接続先を変更', () => ui.move(vm));
       button.setAttribute('aria-label', vm.name + ' の接続先を変更');
@@ -57,14 +60,14 @@ export function topologyGraph(inventory, ui) {
     return node;
   }
 
-  function members(vms, emptyText = '接続中の VM はありません') {
+  function members(vms, emptyText = '接続中の機器はありません') {
     if (!vms.length) return element('p', emptyText, 'meta');
     const list = element('ul', undefined, 'graph-vms');
     list.append(...vms.map(vmNode));
     return list;
   }
 
-  const vmById = new Map(inventory.vms.filter(vm => !vm.legacy_container).map(vm => [vm.id, vm]));
+  const vmById = new Map(devices.filter(vm => !vm.legacy_container).map(vm => [vm.id, vm]));
   function dropTarget(board, topologyId, segment) {
     function isVMDrag(event) {
       return !ui.busy && event.dataTransfer.types.includes('application/x-windows-console-vm');
@@ -89,13 +92,17 @@ export function topologyGraph(inventory, ui) {
     };
   }
 
-  view.append(element('p', '停止中の VM をセグメントにドラッグするか、「接続先を変更」で移動できます。', 'graph-help meta'));
+  view.append(element('p', '停止中のVMやコンテナは、ドラッグまたは「接続先を変更」で移動できます。', 'graph-help meta'));
   for (const topology of inventory.topologies) {
     const board = element('section', undefined, 'topology-board');
     board.setAttribute('aria-label', topology.name);
     const heading = element('div', undefined, 'graph-heading');
     const buttons = element('div', undefined, 'actions');
+    const powered = topology.router_status === 'running';
     buttons.append(ui.button('構成を編集', () => ui.edit(topology), {disabled: ui.busy}),
+      ui.button('DNS 設定', () => ui.dns(topology), {disabled: ui.busy}),
+      ui.button(powered ? 'ネットワークを停止' : 'ネットワークを起動',
+        () => ui.power(topology, !powered), {disabled: ui.busy}),
       ui.button('削除', () => ui.remove(topology), {disabled: ui.busy, danger: true}));
     heading.append(element('h3', topology.name), buttons);
     const graph = element('div', undefined, 'graph-tree');
@@ -108,6 +115,10 @@ export function topologyGraph(inventory, ui) {
       ...(!topology.proxy ? ['外部接続なし'] : [])
     ].join(' · ');
     graph.append(stage('ルーター', routerText, 'router-node'));
+    if (topology.dns != null) {
+      graph.append(stage('DNS', ui.serviceState(topology.dns_status) + ' · ' + topology.dns.length + ' 件',
+        'dns-node'));
+    }
     const branches = element('div', undefined, 'graph-branches');
     for (const cidr of topology.segments) {
       const vms = connections.get(topology.id + '/' + cidr) || [];
@@ -125,8 +136,8 @@ export function topologyGraph(inventory, ui) {
   }
 
   const disconnected = element('section', undefined, 'graph-segment graph-detached');
-  disconnected.setAttribute('aria-label', '未接続の VM');
-  disconnected.append(element('h3', '未接続の VM'), members(detached, '未接続の VM はありません'));
+  disconnected.setAttribute('aria-label', '未接続の機器');
+  disconnected.append(element('h3', '未接続の機器'), members(detached, '未接続の機器はありません'));
   dropTarget(disconnected, null, null);
   view.append(disconnected);
   return view;

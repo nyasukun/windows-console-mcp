@@ -307,7 +307,7 @@ class ManagementE2E(unittest.IsolatedAsyncioTestCase):
         await dialog.get_by_role('button', name='保存', exact=True).click()
         board = page.get_by_role('region', name='Graph lab')
         segment = board.get_by_role('region', name='10.113.61.0/24')
-        detached = page.get_by_role('region', name='未接続の VM')
+        detached = page.get_by_role('region', name='未接続の機器')
         await expect(board.get_by_text('透過プロキシ', exact=True)).to_be_visible()
         await detached.get_by_role('listitem').drag_to(segment)
         await expect(segment.get_by_text('Graph endpoint', exact=True)).to_be_visible()

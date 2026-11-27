@@ -8,4 +8,5 @@ dependencies = [
     "pillow>=11,<14",
     "cryptography>=43",
     "pycdlib>=1.14,<2",
+    "asyncssh>=2.20,<3",
 ]

@@ -18,6 +18,7 @@ Web の `/vms/` と MCP は同じインベントリを使用します。次の�
 | MCP ツール | 用途 |
 | --- | --- |
 | `vm_inventory` | 管理対象 VM と電源状態、テンプレート、利用可能な ISO ID、トポロジの一覧 |
+| `container_*`、`browser_*`、`linux_exec`、`vm_topology_dns_save` | Chrome・Linuxコンテナの管理、ブラウザー操作、SSHコマンド実行、DNS設定。[コンテナ操作ガイド](../docs/containers.md) |
 | `vm_iso_register` / `vm_iso_rename` / `vm_iso_delete` | ホスト上の絶対パスから ISO を登録、ID を保ったまま表示名を変更、未使用の ISO ファイルを削除 |
 | `vm_template_save` | ISO と vCPU・RAM・ディスク容量の組み合わせを追加・編集 |
 | `vm_template_delete` | テンプレートを削除 |

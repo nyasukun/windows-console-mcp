@@ -3,3 +3,6 @@
 !console/
 !console/network/
 !console/network/*.py
+!containers/
+!containers/Dockerfile
+!containers/relay.py

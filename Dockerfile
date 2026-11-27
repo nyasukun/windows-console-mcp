@@ -1,4 +1,5 @@
 FROM ubuntu:26.04
+LABEL windows-console.endpoint-network=1
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         dnsmasq-base iproute2 iptables ovmf python3 qemu-system-x86 qemu-system-modules-spice qemu-utils \

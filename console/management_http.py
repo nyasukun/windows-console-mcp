@@ -72,12 +72,19 @@ def install(app, manager):
         ('POST', '/api/topologies'): manager.save_topology,
         ('PUT', '/api/topologies/{topology_id}'): manager.save_topology,
         ('DELETE', '/api/topologies/{topology_id}'): manager.delete_topology,
+        ('PUT', '/api/topologies/{topology_id}/power'): manager.power_topology,
+        ('PUT', '/api/topologies/{topology_id}/dns'): manager.set_topology_dns,
         ('POST', '/api/vms'): manager.create_vm,
         ('PUT', '/api/vms/{vm_id}/network'): manager.set_vm_network,
         ('PUT', '/api/vms/{vm_id}/internet'): manager.set_internet,
         ('POST', '/api/vms/{vm_id}/start'): manager.start_vm,
         ('POST', '/api/vms/{vm_id}/stop'): manager.stop_vm,
         ('DELETE', '/api/vms/{vm_id}'): manager.delete_vm,
+        ('POST', '/api/endpoints'): manager.create_endpoint,
+        ('PUT', '/api/endpoints/{endpoint_id}/network'): manager.set_endpoint_network,
+        ('POST', '/api/endpoints/{endpoint_id}/start'): manager.start_endpoint,
+        ('POST', '/api/endpoints/{endpoint_id}/stop'): manager.stop_endpoint,
+        ('DELETE', '/api/endpoints/{endpoint_id}'): manager.delete_endpoint,
     }
     app.router.add_get('/api/management', overview)
     app.router.add_get('/api/mcp/sse', sse_details)

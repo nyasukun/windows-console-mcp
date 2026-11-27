@@ -1,0 +1,30 @@
+:root {
+  color-scheme: dark;
+  font: 15px/1.45 system-ui, sans-serif;
+  background: #101520;
+  color: #edf1fa;
+  --line: #344257;
+}
+* { box-sizing: border-box }
+body { margin: 0; height: 100dvh; display: flex; flex-direction: column }
+a { color: #a9caff }
+button, input { font: inherit; color: inherit; border: 1px solid var(--line); background: #202b3e; border-radius: 6px; padding: .42rem .7rem }
+button { cursor: pointer }
+button:hover { background: #324561 }
+:focus-visible { outline: 2px solid #a9caff; outline-offset: 2px }
+.session-header { display: flex; gap: .7rem; align-items: center; padding: .75rem 1rem; border-bottom: 1px solid var(--line) }
+.session-header a { margin-inline-start: auto }
+#status { color: #aec3df; font-size: .86rem }
+.tabs-bar { display: flex; gap: .4rem; padding: .45rem; border-bottom: 1px solid var(--line); background: #181f2d }
+#tabs { display: flex; flex: 1; min-width: 0; overflow-x: auto; gap: .35rem }
+.tab-pair { display: flex; flex-shrink: 0; border-radius: 7px; border: 1px solid transparent; background: #202b3e }
+.tab-pair.active { border-color: #92bdfa; background: #2a4673 }
+.tab-pair button { border: 0; background: transparent }
+.tab-pair button:first-child { max-width: 14rem; white-space: nowrap; text-overflow: ellipsis; overflow: hidden }
+#address-form { display: flex; gap: .45rem; padding: .5rem .65rem; border-bottom: 1px solid var(--line) }
+#address { flex: 1; min-width: 0; background: #121927 }
+#browser-view { flex: 1; min-height: 0; position: relative; display: grid; place-items: center; overflow: hidden; background: #080c14 }
+#page-frame { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; touch-action: none }
+#page-frame[hidden] { display: none }
+#page-input { position: absolute; left: -1px; width: 1px; height: 1px; bottom: 0; opacity: 0 }
+#terminal { flex: 1; min-height: 0; padding: 8px; overflow: hidden; background: #0c111a }

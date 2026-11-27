@@ -251,6 +251,7 @@ function render() {
   newVM.disabled = busy;
   $('new-template').disabled = busy || !inventory.images.length;
   $('new-topology').disabled = busy;
+  $('new-endpoint').disabled = busy;
   $('refresh').disabled = busy;
   const imageNames = new Map(inventory.images.map(image => [image.id, image.name]));
   const topologyNames = inventory.topologies.map(topology => [topology.id, topology.name]);
@@ -265,7 +266,48 @@ function render() {
     inventory.images.length ? 'VM を作成するにはテンプレートを追加してください。' :
       '先にインストール ISO を登録してください。'));
   paintSection('images', inventory.images, renderISOs);
-  paintSection('topologies', [inventory.topologies, inventory.vms], renderTopologies);
+  paintSection('endpoints', [inventory.endpoints, topologyNames], () => renderEndpoints(new Map(topologyNames)));
+  paintSection('topologies', [inventory.topologies, inventory.vms, inventory.endpoints], renderTopologies);
+}
+
+function resourcePath(item) {
+  return `${item.kind ? 'endpoints' : 'vms'}/${item.id}`;
+}
+
+function renderEndpoints(topologies) {
+  const cards = (inventory.endpoints || []).map(item => {
+    const card = element('div', undefined, 'card');
+    const detail = element('div');
+    const kind = item.kind === 'browser' ? 'Chrome' : 'Linux';
+    const network = item.address ? [topologies.get(item.topology_id), item.segment, item.address].join(' · ') : '未接続';
+    detail.append(element('strong', item.name), element('div', kind + ' · ' + network, 'meta'), stateBadge(item));
+    const buttons = element('div', undefined, 'actions');
+    const path = resourcePath(item);
+    const consoleURL = '/' + path + '/console/';
+    if (item.status === 'running') {
+      const link = element('a', item.kind === 'browser' ? 'ブラウザーを開く' : 'SSH端末を開く');
+      link.href = consoleURL;
+      buttons.append(link);
+    }
+    if (['running', 'paused', 'restarting'].includes(item.status)) {
+      buttons.append(action('停止', () => operate(path + '/stop', 'POST', {}, {
+        progress: item.name + ' を停止しています…'
+      })));
+    } else if (stopped.has(item.status)) {
+      const launch = open => operate(path + '/start', 'POST', {}, {
+        progress: item.name + ' を起動しています…', onSuccess: open ? () => location.assign(consoleURL) : undefined
+      });
+      buttons.append(action('起動', () => launch(false)), action('起動して開く', () => launch(true)),
+      action('接続先を変更', () => openNetwork(item)), action('削除', () => operate(path, 'DELETE', {}, {
+        confirmation: `「${item.name}」とコンテナのデータを完全に削除しますか？`,
+        progress: item.name + ' を削除しています…'
+      }), {danger: true}));
+    }
+    buttons.append(action('AIエージェントで操作', () => openAgentGuide(item)));
+    card.append(detail, buttons);
+    return card;
+  });
+  $('endpoints').replaceChildren(...(cards.length ? cards : [empty('Chrome または Linux コンテナを作成できます。')]));
 }
 
 function renderISOs() {
@@ -292,9 +334,12 @@ function renderISOs() {
 function renderTopologies() {
   $('topologies').replaceChildren(topologyGraph(inventory, {
     get busy() { return busy; },
-    button: action, edit: openTopology, move: openNetwork, state: stateBadge, serviceState,
+    button: action, edit: openTopology, dns: openDNS, move: openNetwork, state: stateBadge, serviceState,
+    power: (item, running) => operate(`topologies/${item.id}/power`, 'PUT', {running}, {
+      progress: item.name + (running ? ' のネットワークを起動しています…' : ' のネットワークを停止しています…')
+    }),
     canMove: vm => !busy && stopped.has(vm.status),
-    attach: (vm, topology_id, segment) => operate(`vms/${vm.id}/network`, 'PUT', {topology_id, segment}, {
+    attach: (vm, topology_id, segment) => operate(resourcePath(vm) + '/network', 'PUT', {topology_id, segment}, {
       progress: vm.name + ' の接続先を変更しています…', vmId: vm.id
     }),
     remove: removeTopology
@@ -302,7 +347,7 @@ function renderTopologies() {
 }
 
 function removeTopology(item) {
-  const members = inventory.vms.filter(vm => vm.topology_id === item.id);
+  const members = [...inventory.vms, ...(inventory.endpoints || [])].filter(vm => vm.topology_id === item.id);
   if (members.length) {
     message($('message'), '先に接続先を変更してください · ' + members.map(vm => vm.name).join('、'));
     $('message').scrollIntoView({block: 'nearest'});
@@ -408,11 +453,52 @@ function openISOUpload(next) {
 }
 
 function openTopology(item) {
-  const members = item ? inventory.vms.filter(vm => vm.topology_id === item.id) : [];
+  const members = item ? [...inventory.vms, ...(inventory.endpoints || [])].filter(vm => vm.topology_id === item.id) : [];
   dialog(item ? 'トポロジーを編集' : 'トポロジーを作成', '保存', () =>
     topologyEditor(item, members, {
       fields, input, button: action, submitButton: $('submit'), isStopped: vm => stopped.has(vm.status)
     }), item ? `topologies/${item.id}` : 'topologies', item ? 'PUT' : 'POST');
+}
+
+function openDNS(item) {
+  dialog(`${item.name} の DNS 設定`, '保存', () => {
+    const enabled = input('DNS を有効にする', '', {type: 'checkbox', required: false, checked: item.dns != null});
+    const table = element('div', undefined, 'dns-records');
+    const rows = element('div', undefined, 'dns-rows');
+    const addresses = element('datalist');
+    addresses.id = 'dns-addresses';
+    for (const container of inventory.endpoints || []) {
+      if (container.topology_id === item.id && container.address) {
+        addresses.append(new Option(container.name, container.address));
+      }
+    }
+    function addRecord({name = '', address = ''} = {}) {
+      const row = element('div', undefined, 'dns-record');
+      const nameField = Object.assign(element('input'), {value: name, required: true, placeholder: 'app.example.test'});
+      const addressField = Object.assign(element('input'), {value: address, required: true, placeholder: '10.40.0.14'});
+      addressField.setAttribute('list', addresses.id);
+      const nameLabel = element('label', 'ドメイン名');
+      const addressLabel = element('label', '接続先 IPv4');
+      nameLabel.append(nameField);
+      addressLabel.append(addressField);
+      row.append(nameLabel, addressLabel, action('行を削除', () => row.remove()));
+      rows.append(row);
+    }
+    table.append(element('p', '接続先には同じトポロジーのIPを指定します。コンテナ名から候補を選べます。', 'meta'),
+      addresses, rows, action('＋ レコードを追加', () => addRecord()));
+    function toggle() {
+      table.hidden = !enabled.checked;
+      for (const field of rows.querySelectorAll('input')) field.disabled = !enabled.checked;
+    }
+    enabled.onchange = toggle;
+    for (const record of item.dns || []) addRecord(record);
+    fields.append(table);
+    toggle();
+    return () => ({records: enabled.checked ? [...rows.children].map(row => {
+      const [name, address] = row.querySelectorAll('input');
+      return {name: name.value.trim(), address: address.value.trim()};
+    }) : null});
+  }, `topologies/${item.id}/dns`, 'PUT');
 }
 
 function networkFields(vm, allowDirect = false) {
@@ -451,6 +537,15 @@ function openVM() {
   }, 'vms', 'POST');
 }
 
+function openEndpoint() {
+  dialog('コンテナを作成', '作成', () => {
+    const name = input('コンテナ名', '', {maxLength: 80});
+    const kind = select('種類', 'browser', [['browser', 'Chrome'], ['linux', 'Linux']]);
+    const network = networkFields();
+    return () => ({name: name.value, kind: kind.value, ...network()});
+  }, 'endpoints', 'POST');
+}
+
 function natField(enabled) {
   const checkbox = field('インターネット接続を有効にする（個別NAT）',
     Object.assign(element('input'), {type: 'checkbox', checked: enabled}));
@@ -469,7 +564,7 @@ function openInternet(vm) {
 }
 
 function openNetwork(vm) {
-  dialog(`${vm.name} の接続先`, '保存', () => networkFields(vm), `vms/${vm.id}/network`, 'PUT');
+  dialog(`${vm.name} の接続先`, '保存', () => networkFields(vm), resourcePath(vm) + '/network', 'PUT');
 }
 
 function beginVMCreation() {
@@ -482,6 +577,7 @@ $('new-vm').onclick = beginVMCreation;
 $('new-iso').onclick = () => openISOUpload();
 $('new-template').onclick = () => openTemplate();
 $('new-topology').onclick = () => openTopology();
+$('new-endpoint').onclick = openEndpoint;
 $('agent-start').onclick = () => openAgentGuide();
 $('refresh').onclick = refresh;
 $('cancel').onclick = () => editor.close();
@@ -511,5 +607,5 @@ $('editor-form').onsubmit = async event => {
     }
   }
 };
-for (const id of ['new-vm', 'new-template', 'new-topology']) $(id).disabled = true;
+for (const id of ['new-vm', 'new-template', 'new-topology', 'new-endpoint']) $(id).disabled = true;
 refresh();

@@ -8,6 +8,11 @@ h3, h4 { margin: 0; font-size: inherit }
 .graph-node { display: grid; max-width: 100%; padding: 7px 12px; background: var(--node); border: 1px solid #486894; border-radius: 8px }
 .graph-node .meta { font-size: .78rem }
 .router-node { position: relative; margin-left: 0 }
+.dns-node { margin: 8px 0 0 24px }
+.dns-records, .dns-rows { display: grid; gap: .6rem }
+.dns-records > button { justify-self: start }
+.dns-record { display: flex; flex-wrap: wrap; align-items: end; gap: .6rem }
+.dns-record label { flex: 1 1 160px }
 .graph-uplink { display: grid; justify-items: start; gap: 14px; margin-bottom: 14px }
 .graph-uplink .proxy-node { position: relative }
 .graph-uplink .proxy-node::before, .has-uplink .router-node::before { content: ''; position: absolute; left: 12px; bottom: 100%; height: 15px; border-left: 1px solid var(--wire) }

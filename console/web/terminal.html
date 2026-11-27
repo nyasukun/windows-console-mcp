@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Linux SSH · Windows Console</title>
+  <link rel="stylesheet" href="/ui/vendor/xterm.css">
+  <link rel="stylesheet" href="/ui/endpoint.css">
+  <script defer src="/ui/vendor/xterm.js"></script>
+  <script defer src="/ui/vendor/xterm-fit.js"></script>
+  <script type="module" src="/ui/terminal.js"></script>
+</head>
+<body>
+  <header class="session-header"><strong>Linux SSH</strong><span id="status" role="status">接続中</span><button type="button" id="reconnect" hidden>再接続</button><a href="/vms/">VM・コンテナ管理</a></header>
+  <main id="terminal" aria-label="Linux SSH端末"></main>
+</body>
+</html>

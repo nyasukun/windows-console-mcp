@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Chrome · Windows Console</title>
+  <link rel="stylesheet" href="/ui/endpoint.css">
+  <script type="module" src="/ui/browser.js"></script>
+</head>
+<body>
+  <header class="session-header"><strong>Chrome</strong><span id="status" role="status">接続中</span><a href="/vms/">VM・コンテナ管理</a></header>
+  <div class="tabs-bar">
+    <div id="tabs" role="tablist" aria-label="Chrome のタブ"></div>
+    <button type="button" id="new-tab" aria-label="新しいタブ">＋</button>
+  </div>
+  <form id="address-form">
+    <input id="address" aria-label="アドレス" type="text" autocomplete="off" spellcheck="false" placeholder="http://app.example.test">
+    <button type="submit">開く</button>
+  </form>
+  <main id="browser-view" role="tabpanel" aria-label="Chrome の画面">
+    <img id="page-frame" alt="リモート Chrome の画面" draggable="false" hidden>
+    <textarea id="page-input" tabindex="-1" aria-label="リモート Chrome へのキーボード入力"></textarea>
+  </main>
+</body>
+</html>

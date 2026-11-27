@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 from aiohttp import WSMsgType, web
 
 from live_screen import frames, jpeg
+from endpoint_http import install as install_endpoints
 from management_http import install as install_management
 from vm_manager import VMManager
 from qmp import Monitor, SocketReplaced, socket_identity
@@ -30,7 +31,7 @@ async def local_only(request, handler):
         raise web.HTTPForbidden()
     socket_path = request.path.rsplit('/', 1)[-1] in ('input', 'display', 'display-frames')
     mutation = request.path.startswith('/api/') and request.method not in ('GET', 'HEAD')
-    if socket_path or mutation:
+    if socket_path or mutation or request.headers.get('Upgrade', '').lower() == 'websocket':
         origin = urlsplit(request.headers.get('Origin', ''))
         if origin.scheme not in ('http', 'https') or origin.netloc != request.host:
             raise web.HTTPForbidden()
@@ -445,6 +446,7 @@ class ManagedConsoleSessions:
 def create_app(manager=None):
     manager = manager or VMManager()
     app = web.Application(middlewares=[local_only])
+    install_endpoints(app, manager)
     app['port'] = configured_port()
     sessions = ManagedConsoleSessions(manager)
     app['console_sessions'] = sessions

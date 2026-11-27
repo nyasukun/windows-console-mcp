@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 
+from addressing import dhcp_end
+
 
 def run(*args):
     subprocess.run(args, check=True)
@@ -22,7 +24,10 @@ def main():
 
     dns = ['dnsmasq', '--keep-in-foreground', '--log-facility=-', '--bind-dynamic', '--no-resolv',
            '--except-interface=lo', '--dhcp-authoritative', '--dhcp-broadcast', '--dhcp-leasefile=/tmp/dnsmasq.leases']
-    if config['proxy']:
+    use_dns = config.get('dns') is not None or config['proxy']
+    if config.get('dns') is not None:
+        dns += ['--server=127.0.0.1#5353']
+    elif config['proxy']:
         dns += ['--server=1.1.1.1', '--server=9.9.9.9']
     else:
         dns += ['--port=0', '--dhcp-option=option:dns-server']
@@ -34,13 +39,14 @@ def main():
         run('ip', 'addr', 'add', f'{gateway}/{network.prefixlen}', 'broadcast', '+', 'dev', interface)
         run('ip', 'link', 'set', interface, 'up')
         dns += [f'--interface={interface}',
-                f'--dhcp-range={network[2]},{network[-2]},{network.netmask},12h']
+                f'--dhcp-range={network[2]},{dhcp_end(network)},{network.netmask},12h']
         run('iptables', '-A', 'FORWARD', '-i', interface, '-s', str(network), '-o', 'lan+', '-j', 'ACCEPT')
         run('iptables', '-A', 'INPUT', '-i', interface, '-p', 'udp', '--dport', '67', '-j', 'ACCEPT')
-        if config['proxy']:
+        if use_dns:
             for protocol in ('tcp', 'udp'):
                 run('iptables', '-A', 'INPUT', '-i', interface, '-d', str(gateway),
                     '-p', protocol, '--dport', '53', '-j', 'ACCEPT')
+        if config['proxy']:
             run('iptables', '-A', 'INPUT', '-i', interface, '-p', 'tcp', '--dport', '15001',
                 '-m', 'conntrack', '--ctstate', 'DNAT', '-j', 'ACCEPT')
             # Keep traffic between the configured segments on the router.
